@@ -10,7 +10,7 @@ enum : uint8_t { U = 1, R = 2, D = 4, L = 8, A = 16, B = 32, C = 64 };
 struct Step { int frames; uint8_t keys; };
 // Level 1: grab the shotgun west of the start, come back, shoot the two barrels up north.
 // Tuned by watching the result; change a mod or setting that affects movement and it may need retuning.
-static const Step script[] = { // frame counts at 60 FPS
+static const Step script[] = { // durations in 1/60 s, whatever SFG_FPS is
 	{ 90, 0 }, { 6, A },  // main menu, play
 	{ 90, 0 }, { 6, A },  // intro text, skip
 	{ 90, 0 }, { 6, A },  // level start
@@ -55,14 +55,20 @@ int main(int argc, char** argv){
 
 	SFG_init();
 	int frame = 0;
-	for(const Step& s : script)
-		for(int i = 0; i < s.frames; i++, frame++){
+	uint32_t nextCapture = 0, scriptTime = 0; // ms
+	for(const Step& s : script){
+		scriptTime += s.frames * 1000 / 60;
+		for(; now < scriptTime; frame++){
 			keys = s.keys;
-			now += 1000 / SFG_FPS + (frame % 3 != 0); // 16,17,17 ms: exactly 60 FPS on average
+			now = (frame + 1) * 1000 / SFG_FPS; // exact game time, no drift
 			const bool init = SFG_game.state == SFG_GAME_STATE_INIT; // this call draws nothing
 			SFG_mainLoopBody();
-			if(frame % 3 == 0 && !init) fwrite(screen, 1, sizeof(screen), out); // 20 FPS GIF
+			if(now >= nextCapture && !init){ // a 20 FPS GIF at any SFG_FPS
+				fwrite(screen, 1, sizeof(screen), out);
+				nextCapture += 50;
+			}
 		}
+	}
 	fclose(out);
 	fclose(pal);
 	fprintf(stderr, "%d game frames\n", frame);

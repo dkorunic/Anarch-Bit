@@ -538,6 +538,9 @@ extern "C" void app_main(){
 				lit = true;
 				backlightFade(blFull);
 			}
+			// Behind schedule: the next call renders again without sleeping. Yield a tick so the
+			// idle task (and the task watchdog it feeds) still runs on this core.
+			if(SFG_getTimeMs() - SFG_game.frameTime >= SFG_MS_PER_FRAME) vTaskDelay(1);
 		}
 	}
 }

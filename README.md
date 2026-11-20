@@ -114,10 +114,12 @@ pointers into the firmware), so reflashing a different build discards it.
 
 ## Performance
 
-Renders at full 128x128 (`SFG_RAYCASTING_SUBSAMPLE 1`), 60 FPS, frames sent to the
-panel by DMA while the next one renders. `idf.py monitor` prints `CPU load: N%` every
-16 frames (share of the frame time budget). If it stays above 100%, set
-`SFG_RAYCASTING_SUBSAMPLE 2` and/or a lower `SFG_FPS` in `main/main.cpp`.
+Renders at full 128x128 (`SFG_RAYCASTING_SUBSAMPLE 1`), 45 FPS, frames sent to the panel by
+DMA while the next one renders; flash runs in QIO mode with enlarged caches (the HD textures
+are read from flash every frame). With all mods, 60 FPS measured 93-131% CPU load in play on
+a Bit 3, hence 45. `idf.py monitor` prints `CPU load: N%` every 16 frames (share of the
+frame time budget). If it stays above 100%, set `SFG_RAYCASTING_SUBSAMPLE 2` and/or a lower
+`SFG_FPS` in `main/anarch_settings.h`.
 
 ## Auto-sleep
 
