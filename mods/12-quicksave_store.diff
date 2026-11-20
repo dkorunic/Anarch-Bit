@@ -1,10 +1,10 @@
 anarch-bit: lets the front end store the quicksave permanently (SFG_QUICKSAVE_STORE)
-and keeps current progress/settings when quickloading.
+keeps current progress/settings when quickloading and rebases the level clock.
 
 diff -Naru 11/game.h 12/game.h
---- 11/game.h	2026-11-20 22:25:44.878689938 +0000
-+++ 12/game.h	2026-11-20 22:27:03.767756933 +0000
-@@ -669,17 +669,30 @@
+--- 11/game.h	2026-11-20 23:04:15.923277019 +0000
++++ 12/game.h	2026-11-20 23:04:15.975275167 +0000
+@@ -669,17 +669,34 @@
    SFG_quickSaveGame = SFG_game;
    SFG_quickSavePlayer = SFG_player;
    SFG_quickSaveCurrentLevel = SFG_currentLevel;
@@ -26,6 +26,10 @@ diff -Naru 11/game.h 12/game.h
    SFG_game = SFG_quickSaveGame;
    SFG_player = SFG_quickSavePlayer;
    SFG_currentLevel = SFG_quickSaveCurrentLevel;
++
++  // the level clock (moving walls, completion time) ran in the quicksave's own session, maybe
++  // before a reboot: shift it by the time since, so frameTime - timeStart is as when saved
++  SFG_currentLevel.timeStart += frameTime - SFG_quickSaveGame.frameTime;
    SFG_game.frameTime = frameTime;
 +  SFG_game.settings = settings;
 +

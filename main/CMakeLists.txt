@@ -7,6 +7,7 @@ idf_component_register(SRCS "main.cpp"
 set(ANARCH_DIR ${CMAKE_CURRENT_BINARY_DIR}/anarch)
 file(GLOB ANARCH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/../anarch/*.h ${CMAKE_CURRENT_LIST_DIR}/../anarch/*.c)
 file(GLOB ANARCH_MODS CONFIGURE_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/../mods/*.diff)
+list(SORT ANARCH_MODS)
 if(NOT ANARCH_SOURCES)
     message(FATAL_ERROR "anarch submodule is empty, run: git submodule update --init")
 endif()
@@ -19,7 +20,8 @@ foreach(source ${ANARCH_SOURCES})
 endforeach()
 
 add_custom_command(OUTPUT ${ANARCH_PATCHED}
-    COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/../tools/patch_anarch.sh ${ANARCH_DIR}
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${ANARCH_DIR} # inside build/: also clears trees from older script versions
+    COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/../tools/patch_anarch.sh ${ANARCH_DIR} ${ANARCH_MODS}
     DEPENDS ${ANARCH_SOURCES} ${ANARCH_MODS} ${CMAKE_CURRENT_LIST_DIR}/../tools/patch_anarch.sh
     COMMENT "Patching Anarch with mods/*.diff"
     VERBATIM)

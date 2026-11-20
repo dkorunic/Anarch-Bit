@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anarch for CircuitMess Bit: install</title>
+<meta name="description" content="Flash Anarch onto a CircuitMess Bit from the browser.">
+<!-- ESP Web Tools (built on Espressif's esptool-js), served from this site by web/build.sh -->
+<script type="module" src="esp-web-tools/install-button.js"></script>
+<style>
+  :root { --bg: #f6f5f2; --fg: #1d1d1f; --muted: #5d5d63; --card: #fff; --line: #dedcd6; --accent: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141416; --fg: #ececee; --muted: #a2a2aa; --card: #1d1d21; --line: #2e2e34; --accent: #ff6b5e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .demo { display: block; width: 256px; max-width: 100%; height: auto; image-rendering: pixelated; border-radius: 6px; margin: 0 auto 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+  ol { margin: 0; padding-left: 1.3em; }
+  li + li { margin-top: 6px; }
+  .install { text-align: center; margin: 8px 0 20px; }
+  .warn { color: var(--accent); }
+  a { color: inherit; }
+  code { font-size: 0.9em; }
+  esp-web-install-button button[slot] { font: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Anarch for CircuitMess Bit</h1>
+  <p class="sub">The public domain Doom-style shooter, flashed straight from your browser. Version <span id="version">…</span>.</p>
+
+  <img class="demo" src="demo.gif" width="256" height="256" alt="Anarch on the Bit: menu, level 1, shotgun pickup, exploding barrels">
+
+  <div class="card">
+    <ol>
+      <li>Use desktop <strong>Chrome, Edge or Opera</strong> (they have Web Serial; Firefox and Safari don't).</li>
+      <li>Connect the Bit with a USB-C data cable and switch it on.</li>
+      <li>Press <strong>Connect</strong>, pick the Bit's serial port, then <strong>Install</strong>.</li>
+      <li>When it's done, switch the Bit off and on.</li>
+    </ol>
+  </div>
+
+  <div class="install">
+    <esp-web-install-button manifest="manifest.json">
+      <span slot="unsupported">Your browser can't flash devices. Open this page in desktop Chrome, Edge or Opera.</span>
+      <span slot="not-allowed">Flashing needs a secure (https) page.</span>
+    </esp-web-install-button>
+  </div>
+
+  <div class="card">
+    <p class="warn" style="margin-top:0"><strong>This replaces the Bit's stock firmware</strong> and erases Anarch's saved progress (unlocked levels, settings, quicksave).</p>
+    <p style="margin-bottom:0">Back to stock: flash the image from the
+      <a href="https://github.com/CircuitMess/Bit-Firmware/releases">Bit-Firmware releases</a>.
+      Source, controls and other ways to flash:
+      <a href="https://github.com/dkorunic/Anarch-Bit">github.com/dkorunic/Anarch-Bit</a>.</p>
+  </div>
+</main>
+<script>
+  fetch("manifest.json").then(r => r.json()).then(m => { document.getElementById("version").textContent = m.version; })
+    .catch(() => { document.getElementById("version").textContent = "unknown"; });
+</script>
+</body>
+</html>

@@ -94,6 +94,7 @@ static adc_channel_t battChan;
 static adc_cali_handle_t battCali; // rev 3+ only
 static float battOffset; // mV: rev 3+ from the vref calibration, rev 1 from efuse
 static float battEma = -1;
+static bool battMonitor = true; // off when the chip has no ADC calibration to compute volts from
 
 static uint8_t readRevision(){
 	static const esp_efuse_desc_t revField = { EFUSE_BLK3, 32, 8 }; // EfuseMeta.h
@@ -206,12 +207,14 @@ static bool readBatt(float& mV){
 }
 
 static void sampleBatt(){
+	if(!battMonitor) return;
 	float v;
 	if(readBatt(v)) battEma = battEma < 0 ? v : battEma * 0.95f + v * 0.05f;
 }
 
 // Battery percentage exactly as Bit-Firmware BatteryRev3 / BatteryRev1 (ADCReader) compute it.
 static float battPercent(){
+	if(!battMonitor) return 100; // unknown: never shut down for it
 	float mV, lo, hi;
 	if(battCali){
 		mV = (int) (-1.1316f * (377.595f - (battEma * 4 + battOffset)));
@@ -240,7 +243,13 @@ static void initBattery(){
 		cc.chan = battChan;
 		cc.atten = c.atten;
 		cc.bitwidth = c.bitwidth;
-		ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&cc, &battCali));
+		// Bit-Firmware aborts here; raw readings would give nonsense volts and could trip the
+		// low-battery shutdown at every boot, so run without battery monitoring instead.
+		if(adc_cali_create_scheme_curve_fitting(&cc, &battCali) != ESP_OK){
+			printf("No ADC calibration in eFuse: battery monitoring off\n");
+			battMonitor = false;
+			return;
+		}
 
 		// Switch the 2.5 V reference onto the battery pin and measure the ADC offset (BatteryRev3::calibrate).
 		const auto vref = (gpio_num_t) pins.vref;
@@ -484,6 +493,7 @@ extern "C" void app_main(){
 	while(SFG_getTimeMs() - splashTime < 2000) vTaskDelay(pdMS_TO_TICKS(10));
 	backlightFade(0);
 
+	SFG_game.frameTime = SFG_getTimeMs(); // SFG_init set 0: don't catch up on the splash time in the first frame
 	lcd.startWrite(); // keep the bus so pushImageDMA returns while the transfer runs
 	bool lit = false, dimmed = false;
 	uint32_t tickTime = SFG_getTimeMs(), activityTime = tickTime;
@@ -516,8 +526,10 @@ extern "C" void app_main(){
 		}
 
 		slept = false;
+		const bool init = SFG_game.state == SFG_GAME_STATE_INIT; // waits for A/B release, draws nothing
 		SFG_mainLoopBody();
-		if(!slept){
+		if(init) vTaskDelay(1);
+		else if(!slept){
 			// LovyanGFX waits for the previous transfer itself; the game then draws into the other buffer.
 			drawLowBattery(now);
 			lcd.pushImageDMA(0, 0, SFG_SCREEN_RESOLUTION_X, SFG_SCREEN_RESOLUTION_Y, (const lgfx::swap565_t*) frame);

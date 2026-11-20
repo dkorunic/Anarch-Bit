@@ -59,8 +59,9 @@ int main(int argc, char** argv){
 		for(int i = 0; i < s.frames; i++, frame++){
 			keys = s.keys;
 			now += 1000 / SFG_FPS + (frame % 3 != 0); // 16,17,17 ms: exactly 60 FPS on average
+			const bool init = SFG_game.state == SFG_GAME_STATE_INIT; // this call draws nothing
 			SFG_mainLoopBody();
-			if(frame % 3 == 0) fwrite(screen, 1, sizeof(screen), out); // 20 FPS GIF
+			if(frame % 3 == 0 && !init) fwrite(screen, 1, sizeof(screen), out); // 20 FPS GIF
 		}
 	fclose(out);
 	fclose(pal);

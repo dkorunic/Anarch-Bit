@@ -5,6 +5,9 @@
 Standalone ESP-IDF firmware that runs only Anarch on a CircuitMess Bit
 (all revisions; Bit 3.0 = hardware revision 3/4, read from efuse).
 
+**[Install from your browser](https://dkorunic.github.io/Anarch-Bit/)**: desktop Chrome, Edge
+or Opera, a USB-C cable, one click. Nothing to install.
+
 ![Anarch on the Bit: menu, level 1, shotgun pickup, exploding barrels](demo.gif)
 
 What the Bit's 128x128 screen shows, at 2x size and 20 FPS: rendered on the PC by
@@ -41,8 +44,12 @@ A new or updated mod must apply on top of the previous ones: make it against the
 
 ## Flash a prebuilt release
 
-Every `v*` tag gets a [release](https://github.com/dkorunic/Anarch-Bit/releases) with two
-files built by CI:
+The easiest way is the [browser installer](https://dkorunic.github.io/Anarch-Bit/) (ESP Web
+Tools, built on Espressif's esptool-js; needs desktop Chrome, Edge or Opera for Web Serial).
+It always flashes the latest release's complete image, which erases saved progress.
+
+Every `v*` tag also gets a [release](https://github.com/dkorunic/Anarch-Bit/releases) with
+two files built by CI:
 
 - `anarch-bit-merged.bin`: the complete image for a first install, written at `0x0`. It also
   erases saved progress (unlocked levels, settings).
@@ -57,9 +64,10 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0x0 anarch-bit-merged.bin 
 esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0x10000 anarch-bit.bin      # update
 ```
 
-The port is `COMx` on Windows and `/dev/cu.usbmodem...` on macOS. Without installing
-anything: open Espressif's [web flasher](https://espressif.github.io/esptool-js/) in
-Chrome or Edge, Connect to the Bit, add the file at the same address, Program.
+The port is `COMx` on Windows and `/dev/cu.usbmodem...` on macOS. To update while keeping
+saved progress without installing esptool, use Espressif's generic
+[esptool-js flasher](https://espressif.github.io/esptool-js/): Connect to the Bit, add
+`anarch-bit.bin` at `0x10000`, Program.
 
 ## Build and flash
 
@@ -133,13 +141,17 @@ ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
 - `tools/patch_anarch.sh <dir>`: writes the patched Anarch tree the firmware is built from
   (the build runs it too).
 - `tools/smoke_test.sh`: plays all 10 levels of the patched game with random input under
-  ASan/UBSan and checks the quicksave behaviour of mod 12; about a minute.
+  ASan/UBSan (deaths, a forced win per level, level transitions) and checks the quicksave
+  behaviour of mod 12; about a minute.
 - `tools/make_demo.sh`: regenerates `demo.gif`. The run is scripted in frames, so changes
   that affect movement or aiming may need `tools/demo.cpp` retuned.
+- `web/build.sh <dir> <anarch-bit-merged.bin> <version>`: assembles the browser installer
+  site (page, manifest, firmware, and ESP Web Tools checked against a pinned hash and served
+  from the site itself, no CDN).
 
 CI (`.github/workflows/build.yml`) runs the smoke test on every push and pull request,
 then builds the firmware in the `espressif/idf:v5.4.1` image; on `v*` tags it attaches
-both images to a release.
+both images to a release and deploys the browser installer to GitHub Pages.
 
 ## License
 

@@ -1,0 +1,10 @@
+{
+  "name": "Anarch for CircuitMess Bit",
+  "version": "dev",
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [{ "path": "anarch-bit-merged.bin", "offset": 0 }]
+    }
+  ]
+}
