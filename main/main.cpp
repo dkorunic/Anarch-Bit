@@ -150,7 +150,7 @@ static void initBacklight(){
 	t.duty_resolution = LEDC_TIMER_10_BIT;
 	t.timer_num = LEDC_TIMER_1; // own timer: the buzzer keeps changing LEDC_TIMER_0's frequency
 	t.freq_hz = 5000;
-	t.clk_cfg = LEDC_AUTO_CLK;
+	t.clk_cfg = LEDC_USE_XTAL_CLK; // S3: one clock source for all LEDC timers, see initBuzzer
 	ESP_ERROR_CHECK(ledc_timer_config(&t));
 
 	ledc_channel_config_t c = {};
@@ -334,7 +334,9 @@ static void initBuzzer(){
 	t.duty_resolution = LEDC_TIMER_10_BIT;
 	t.timer_num = LEDC_TIMER_0;
 	t.freq_hz = 1000;
-	t.clk_cfg = LEDC_AUTO_CLK;
+	// 40 MHz crystal: 10-bit duty reaches 38 Hz-39 kHz. Auto picked the 80 MHz APB clock for
+	// 1000 Hz, whose divider can't go below ~76 Hz, so the 50 Hz sweep ends failed.
+	t.clk_cfg = LEDC_USE_XTAL_CLK;
 	ESP_ERROR_CHECK(ledc_timer_config(&t));
 
 	ledc_channel_config_t c = {};
