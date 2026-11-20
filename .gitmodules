@@ -1,0 +1,3 @@
+[submodule "anarch"]
+	path = anarch
+	url = https://github.com/szymor/anarch

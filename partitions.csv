@@ -1,0 +1,6 @@
+# IDF's single-app-large layout (same offsets, so NVS saves survive) plus room for the quicksave.
+# Name,    Type, SubType, Offset, Size
+nvs,       data, nvs,     ,       0x6000,
+phy_init,  data, phy,     ,       0x1000,
+factory,   app,  factory, ,       1500K,
+quicksave, data, 0x40,    ,       64K,

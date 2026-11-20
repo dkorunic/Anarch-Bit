@@ -1,0 +1,62 @@
+This mod smoothes out the corners of the blocky text font a little bit.
+
+Rebased by anarch-bit onto szymor/anarch 646e73a, on top of the lower-numbered mods.
+
+diff -Naru 01/game.h 02/game.h
+--- 01/game.h	2026-11-20 22:25:44.734695291 +0000
++++ 02/game.h	2026-11-20 22:25:44.746694845 +0000
+@@ -3022,6 +3022,22 @@
+       //SFG_PROGRAM_MEMORY_U8(SFG_font + SFG_charToFontIndex(text[pos]));
+       SFG_font[SFG_charToFontIndex(text[pos])];
+ 
++    uint16_t // corner neighbors
++      ntl = ((character & 0xeeee) >> 1) |                        // top
++       (character >> (SFG_FONT_CHARACTER_SIZE)) |                // left
++       ((character & 0xeeee) >> (SFG_FONT_CHARACTER_SIZE + 1)),  // top left
++      ntr = ((character & 0xeeee) >> 1) |
++       (character << (SFG_FONT_CHARACTER_SIZE)) |
++       ((character & 0xeeee) << (SFG_FONT_CHARACTER_SIZE - 1)),
++      nbl = ((character & 0x7777) << 1) |
++       (character >> (SFG_FONT_CHARACTER_SIZE)) |
++       ((character & 0x7777) >> (SFG_FONT_CHARACTER_SIZE - 1)),
++      nbr = ((character & 0x7777) << 1) |
++       (character << (SFG_FONT_CHARACTER_SIZE)) |
++       ((character & 0x7777) << (SFG_FONT_CHARACTER_SIZE + 1));
++
++    int cornerSize = (size - 1) / 2;
++
+     for (uint8_t i = 0; i < SFG_FONT_CHARACTER_SIZE; ++i) // for each line
+     {
+       currentY = y;
+@@ -3037,11 +3053,30 @@
+ 
+               if (drawX < SFG_GAME_RESOLUTION_X &&
+                 drawY < SFG_GAME_RESOLUTION_Y)
+-                SFG_setGamePixel(drawX,drawY,color);
++              {
++                if (l < cornerSize)
++                {
++                  if (((k >= cornerSize) & (ntr >> 15)) |
++                    ((k < size - cornerSize) & (ntl >> 15)))
++                  SFG_setGamePixel(drawX,drawY,color);
++                }
++                else if (l >= size - cornerSize)
++                {
++                  if (((k >= cornerSize) & (nbr >> 15)) |
++                    ((k < size - cornerSize) & (nbl >> 15)))
++                  SFG_setGamePixel(drawX,drawY,color);
++                }
++                else
++                  SFG_setGamePixel(drawX,drawY,color);
++              }
+             }
+ 
+         currentY += size;
+         character = character << 1;
++        ntl <<= 1;
++        ntr <<= 1;
++        nbl <<= 1;
++        nbr <<= 1;
+       }
+ 
+       currentX += size;

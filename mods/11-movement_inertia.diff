@@ -1,0 +1,65 @@
+This is a mod for game Anarch that adds simple movement inertia, made by
+drummyfish, released under CC0 1.0, diff made against version 1.02d.
+
+Rebased by anarch-bit onto szymor/anarch 646e73a, on top of the lower-numbered mods.
+
+diff -Naru 10/constants.h 11/constants.h
+--- 10/constants.h	2026-11-20 22:25:44.782693507 +0000
++++ 11/constants.h	2026-11-20 22:25:44.878689938 +0000
+@@ -142,6 +142,17 @@
+ #define SFG_DAMAGE_RANDOMNESS 64 
+ 
+ /**
++  Specifies the amount of movement inertia, every frame 1 / 
++  SFG_MOVEMENT_INERTIA_AMOUNT th of the desired move direction will contribute
++  to the current movement state.
++*/
++#if SFG_FPS >= 45
++  #define SFG_MOVEMENT_INERTIA_AMOUNT 16
++#else
++  #define SFG_MOVEMENT_INERTIA_AMOUNT 8
++#endif
++
++/**
+   Height of monster collision BBox in RCL_Units.
+ */
+ #define SFG_MONSTER_COLLISION_HEIGHT 1024
+diff -Naru 10/game.h 11/game.h
+--- 10/game.h	2026-11-20 22:25:44.862690534 +0000
++++ 11/game.h	2026-11-20 22:25:44.878689938 +0000
+@@ -437,6 +437,7 @@
+   int8_t squarePosition[2];
+   RCL_Vector2D direction;
+   RCL_Unit verticalSpeed;
++  RCL_Vector2D movementForce;      ///< for movement inertia
+   RCL_Unit previousVerticalSpeed;  /**< Vertical speed in previous frame, needed
+                                    for determining whether player is in the
+                                    air. */
+@@ -1550,6 +1551,9 @@
+   SFG_player.camera.direction = SFG_currentLevel.levelPointer->playerStart[2] *
+     (RCL_UNITS_PER_SQUARE / 256);
+ 
++  SFG_player.movementForce.x = 0;
++  SFG_player.movementForce.y = 0;
++
+   SFG_recomputePLayerDirection(); 
+ 
+   SFG_player.previousVerticalSpeed = 0;
+@@ -3951,7 +3955,16 @@
+   SFG_player.camera.height += 
+     SFG_PREVIEW_MODE_SPEED_MULTIPLIER * SFG_player.verticalSpeed;
+ #else
+-  RCL_moveCameraWithCollision(&(SFG_player.camera),moveOffset,
++
++  SFG_player.movementForce.x =
++    (SFG_player.movementForce.x * (SFG_MOVEMENT_INERTIA_AMOUNT - 1) + 
++      moveOffset.x) / SFG_MOVEMENT_INERTIA_AMOUNT;
++
++  SFG_player.movementForce.y =
++    (SFG_player.movementForce.y * (SFG_MOVEMENT_INERTIA_AMOUNT - 1) + 
++      moveOffset.y) / SFG_MOVEMENT_INERTIA_AMOUNT;
++
++  RCL_moveCameraWithCollision(&(SFG_player.camera),SFG_player.movementForce,
+     verticalOffset,SFG_floorCollisionHeightAt,SFG_ceilingHeightAt,1,1);
+ 
+   SFG_player.previousVerticalSpeed = SFG_player.verticalSpeed;

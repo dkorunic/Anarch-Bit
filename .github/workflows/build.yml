@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs (version in the comment) so a moved tag can't change what runs.
+jobs:
+  smoke-test:
+    name: Smoke test (patched game under ASan/UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: true
+      - run: tools/smoke_test.sh
+
+  firmware:
+    name: Firmware
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    container: espressif/idf@sha256:6b4adab7b282e9261a154d7130fb4945a3c28bd35c2e914357c2f522643cb92a # espressif/idf:v5.4.1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: true
+      - name: Build
+        shell: bash
+        run: |
+          command -v patch >/dev/null || { apt-get update && apt-get install -y --no-install-recommends patch; }
+          . "$IDF_PATH/export.sh"
+          idf.py build
+          idf.py merge-bin -o anarch-bit-merged.bin
+          cp build/anarch-bit-merged.bin build/anarch-bit.bin .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: anarch-bit-firmware
+          path: |
+            anarch-bit-merged.bin
+            anarch-bit.bin
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: firmware
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the only job that can write: attaches the binaries to the release
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: anarch-bit-firmware
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          generate_release_notes: true
+          files: |
+            anarch-bit-merged.bin
+            anarch-bit.bin

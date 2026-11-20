@@ -1,0 +1,150 @@
+# Anarch for CircuitMess Bit
+
+[![Build](https://github.com/dkorunic/Anarch-Bit/actions/workflows/build.yml/badge.svg)](https://github.com/dkorunic/Anarch-Bit/actions/workflows/build.yml)
+
+Standalone ESP-IDF firmware that runs only Anarch on a CircuitMess Bit
+(all revisions; Bit 3.0 = hardware revision 3/4, read from efuse).
+
+![Anarch on the Bit: menu, level 1, shotgun pickup, exploding barrels](demo.gif)
+
+What the Bit's 128x128 screen shows, at 2x size and 20 FPS: rendered on the PC by
+`tools/make_demo.sh` from the same patched sources and settings as the firmware, playing
+a scripted run (`tools/demo.cpp`).
+
+- `anarch/`: git submodule, [szymor/anarch](https://github.com/szymor/anarch), kept unmodified.
+- `mods/`: Anarch mods (`NN-name.diff`). At build time the Anarch sources are copied to
+  `build/esp-idf/main/anarch/` and every `mods/*.diff` is applied in name order, with no
+  fuzz: a mod that doesn't fit exactly fails the build instead of landing in the wrong place.
+  The next `idf.py build` after any change re-patches and recompiles.
+
+Mods 01-11 are from Anarch's `mods/` (the author's "consoomer edition" set, minus `crt`
+and `terminal_messages`), rebased onto the submodule's commit so they stack exactly; the
+original upstream diffs conflict with each other. 12 is ours.
+
+| Mod | Does |
+|---|---|
+| 01 smooth_monsters | monsters move smoothly instead of square by square |
+| 02 smooth_text | rounder font |
+| 03 better_hud | nicer HUD bar with a compass |
+| 04 floor_texture | textured floor (the most common floor height in each level) |
+| 05 full_zbuffer | sprites no longer show through walls |
+| 06 sprite_flipper | some sprites flip to look animated |
+| 07 weapon_swing | weapon sways while walking |
+| 08 particle_effects | particles from shots and explosions |
+| 09 quicksave | `qsave` / `qload` in the game menu |
+| 10 hd | 64x64 textures instead of 32x32 |
+| 11 movement_inertia | smoother acceleration / stopping |
+| 12 quicksave_store | quicksaves survive power-off (see below); quickload keeps current unlocked levels and settings |
+
+A new or updated mod must apply on top of the previous ones: make it against the output of
+`tools/patch_anarch.sh <dir>`, number it after the others, and run `tools/smoke_test.sh`.
+
+## Flash a prebuilt release
+
+Every `v*` tag gets a [release](https://github.com/dkorunic/Anarch-Bit/releases) with two
+files built by CI:
+
+- `anarch-bit-merged.bin`: the complete image for a first install, written at `0x0`. It also
+  erases saved progress (unlocked levels, settings).
+- `anarch-bit.bin`: the app alone, written at `0x10000`, to update an earlier release while
+  keeping saved progress. A quicksave is discarded by any different build either way.
+
+With [esptool](https://docs.espressif.com/projects/esptool/) (`pip install esptool`) and
+the Bit connected over USB:
+
+```shell
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0x0 anarch-bit-merged.bin   # first install
+esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0x10000 anarch-bit.bin      # update
+```
+
+The port is `COMx` on Windows and `/dev/cu.usbmodem...` on macOS. Without installing
+anything: open Espressif's [web flasher](https://espressif.github.io/esptool-js/) in
+Chrome or Edge, Connect to the Bit, add the file at the same address, Program.
+
+## Build and flash
+
+Needs ESP-IDF 5.x (tested to build with v5.4.1) and `patch`. LovyanGFX 1.2.36 is
+fetched from git automatically by the IDF component manager.
+
+```shell
+git clone --recursive <this repo>   # or, in an existing clone: git submodule update --init
+. ~/esp/esp-idf/export.sh
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+This replaces the stock firmware. To go back, flash the stock image from the
+[Bit-Firmware releases](https://github.com/CircuitMess/Bit-Firmware/releases).
+
+## Controls
+
+| Bit button | Anarch key | Does |
+|---|---|---|
+| D-pad | arrows | move / turn, menu navigation |
+| A | A | fire, confirm |
+| B | B | hold + left/right = strafe, hold + up/down = look up/down, cancel |
+| Menu | C | hold + up = jump, hold + left/right (or A/B) = switch weapon, hold + down = game menu |
+
+Saves (unlocked levels, settings) go to NVS flash. Quicksaves (game menu `qsave`, one slot)
+go to their own `quicksave` flash partition and survive power-off, auto-sleep and battery
+shutdown. A quicksave is only loaded by the same firmware build that wrote it (it holds
+pointers into the firmware), so reflashing a different build discards it.
+
+## Not ported
+
+- Music (a buzzer can't play the sampled tracks). Sound effects are short frequency
+  sweeps like the stock firmware's chirps; tweak them in the `sounds` table in `main/main.cpp`.
+
+## Taken from the stock firmware
+
+- Boot: CircuitMess splash (`main/Splash.bmp`, from Bit-Firmware's `spiffs_image`),
+  backlight fade-in and the stock boot jingle; the splash stays 2 s, then fades into the game.
+- Jingles from the stock firmware: item pickup ("good" chirp), level won, player died.
+  They follow Anarch's own sound on/off setting.
+- Backlight fades out before sleep/shutdown. Brightness is `Brightness` (0-100,
+  default 100 like stock) in `main/main.cpp`; lower it to save battery.
+
+## Performance
+
+Renders at full 128x128 (`SFG_RAYCASTING_SUBSAMPLE 1`), 60 FPS, frames sent to the
+panel by DMA while the next one renders. `idf.py monitor` prints `CPU load: N%` every
+16 frames (share of the frame time budget). If it stays above 100%, set
+`SFG_RAYCASTING_SUBSAMPLE 2` and/or a lower `SFG_FPS` in `main/main.cpp`.
+
+## Auto-sleep
+
+Like the stock default, after 2 minutes without any button held the Bit goes to deep
+sleep (`SleepMs` in `main/main.cpp`). 10 s before that the screen dims as a warning;
+any button brings it back. Toggle the power switch to start again. Progress
+inside the current level is lost; unlocked levels are kept.
+
+## Low battery
+
+Below 15% a small red battery blinks in the top-right corner (as stock blinks its empty
+battery icon). Otherwise same as stock firmware: below ~5% at power-on the Bit goes straight to deep sleep;
+while playing, at ~1% it shows "Battery critical, shutting down" for 6 s, then
+deep-sleeps. Charge it and toggle the power switch to start again.
+
+## Development
+
+PC tools, needing a C++20 compiler, `patch` and (for the GIF) Python with Pillow, but not
+ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
+
+- `tools/patch_anarch.sh <dir>`: writes the patched Anarch tree the firmware is built from
+  (the build runs it too).
+- `tools/smoke_test.sh`: plays all 10 levels of the patched game with random input under
+  ASan/UBSan and checks the quicksave behaviour of mod 12; about a minute.
+- `tools/make_demo.sh`: regenerates `demo.gif`. The run is scripted in frames, so changes
+  that affect movement or aiming may need `tools/demo.cpp` retuned.
+
+CI (`.github/workflows/build.yml`) runs the smoke test on every push and pull request,
+then builds the firmware in the `espressif/idf:v5.4.1` image; on `v*` tags it attaches
+both images to a release.
+
+## License
+
+[CC0 1.0](LICENSE) (public domain), like Anarch itself, for everything in this repository
+except `main/Splash.bmp`: the CircuitMess logo, taken from
+[Bit-Firmware](https://github.com/CircuitMess/Bit-Firmware) and remaining CircuitMess's.
+Dependencies keep their own licenses: Anarch and its mods (submodule, CC0) and
+LovyanGFX (fetched at build time, FreeBSD license).

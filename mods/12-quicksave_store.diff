@@ -1,0 +1,37 @@
+anarch-bit: lets the front end store the quicksave permanently (SFG_QUICKSAVE_STORE)
+and keeps current progress/settings when quickloading.
+
+diff -Naru 11/game.h 12/game.h
+--- 11/game.h	2026-11-20 22:25:44.878689938 +0000
++++ 12/game.h	2026-11-20 22:27:03.767756933 +0000
+@@ -669,17 +669,30 @@
+   SFG_quickSaveGame = SFG_game;
+   SFG_quickSavePlayer = SFG_player;
+   SFG_quickSaveCurrentLevel = SFG_currentLevel;
++#ifdef SFG_QUICKSAVE_STORE
++  SFG_QUICKSAVE_STORE(); // front end may keep the quicksave in permanent storage
++#endif
+   SFG_LOG("quicksaved");
+ }
+ 
+ void SFG_quickLoad(void)
+ {
+   uint32_t frameTime = SFG_game.frameTime;
++  uint8_t settings = SFG_game.settings, save[SFG_SAVE_SIZE];
++
++  // keep current progress and settings, the quicksave only restores the level
++  for (uint8_t i = 0; i < SFG_SAVE_SIZE; ++i)
++    save[i] = SFG_game.save[i];
+ 
+   SFG_game = SFG_quickSaveGame;
+   SFG_player = SFG_quickSavePlayer;
+   SFG_currentLevel = SFG_quickSaveCurrentLevel;
+   SFG_game.frameTime = frameTime;
++  SFG_game.settings = settings;
++
++  for (uint8_t i = 0; i < SFG_SAVE_SIZE; ++i)
++    SFG_game.save[i] = save[i];
++
+   SFG_LOG("quickloaded");
+ }
+ 

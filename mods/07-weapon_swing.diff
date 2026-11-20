@@ -1,0 +1,171 @@
+This mod adds horizontal weapon swinging. By drummyfish, released under CC0 1.0,
+public domain.
+
+Rebased by anarch-bit onto szymor/anarch 646e73a, on top of the lower-numbered mods.
+
+diff -Naru 06/game.h 07/game.h
+--- 06/game.h	2026-11-20 22:25:44.810692466 +0000
++++ 07/game.h	2026-11-20 22:25:44.822692020 +0000
+@@ -428,6 +428,7 @@
+                                    for determining whether player is in the
+                                    air. */
+   uint16_t headBobFrame;
++  int16_t  weaponSwingPhase;
+   uint8_t  weapon;                 ///< currently selected weapon
+   uint8_t  health;
+   uint32_t weaponCooldownFrames;   ///< frames left for weapon cooldown
+@@ -1438,6 +1439,7 @@
+   SFG_player.previousVerticalSpeed = 0;
+ 
+   SFG_player.headBobFrame = 0;
++  SFG_player.weaponSwingPhase = 0;
+ 
+   SFG_player.weapon = SFG_WEAPON_KNIFE;
+ 
+@@ -3439,36 +3441,56 @@
+       RCL_min(0,SFG_player.camera.shear + SFG_CAMERA_SHEAR_STEP_PER_FRAME);
+   }
+ 
++
+ #if SFG_HEADBOB_ENABLED && !SFG_PREVIEW_MODE
+   if (bobbing)
+   {
+     SFG_player.headBobFrame += SFG_HEADBOB_FRAME_INCREASE_PER_FRAME; 
++    SFG_player.weaponSwingPhase = 
++      (SFG_player.weaponSwingPhase + SFG_WEAPON_SWING_SPEED / SFG_FPS)
++      % RCL_UNITS_PER_SQUARE;
+   }
+-  else if (SFG_player.headBobFrame != 0)
++  else
+   {
+-    // smoothly stop bobbing
++    if ((SFG_player.weaponSwingPhase % (RCL_UNITS_PER_SQUARE / 4)) == 0)
++      SFG_player.weaponSwingPhase = 0;
++    else
++    {
++#define SMOOTHING 8
++      SFG_player.weaponSwingPhase += (SFG_player.weaponSwingPhase /
++        (RCL_UNITS_PER_SQUARE / 4) % 2) ? SMOOTHING : (-1 * SMOOTHING);
++
++      SFG_player.weaponSwingPhase = (SFG_player.weaponSwingPhase / SMOOTHING)
++        * SMOOTHING;
++#undef SMOOTHING
++    }
+ 
+-    uint8_t quadrant = (SFG_player.headBobFrame % RCL_UNITS_PER_SQUARE) /
+-      (RCL_UNITS_PER_SQUARE / 4);
++    if (SFG_player.headBobFrame != 0)
++    {
++      // smoothly stop bobbing
++
++      uint8_t quadrant = (SFG_player.headBobFrame % RCL_UNITS_PER_SQUARE) /
++        (RCL_UNITS_PER_SQUARE / 4);
++
++      /* When in quadrant in which sin is going away from zero, switch to the
++         same value of the next quadrant, so that bobbing starts to go towards
++         zero immediately. */
+ 
+-    /* When in quadrant in which sin is going away from zero, switch to the
+-       same value of the next quadrant, so that bobbing starts to go towards
+-       zero immediately. */
++      if (quadrant % 2 == 0)
++        SFG_player.headBobFrame =
++          ((quadrant + 1) * RCL_UNITS_PER_SQUARE / 4) +
++          (RCL_UNITS_PER_SQUARE / 4 - SFG_player.headBobFrame %
++          (RCL_UNITS_PER_SQUARE / 4));
+ 
+-    if (quadrant % 2 == 0)
++      RCL_Unit currentFrame = SFG_player.headBobFrame;
++      RCL_Unit nextFrame = SFG_player.headBobFrame + 16;
++
++      // only stop bobbing when we pass a frame at which sin crosses zero
+       SFG_player.headBobFrame =
+-        ((quadrant + 1) * RCL_UNITS_PER_SQUARE / 4) +
+-        (RCL_UNITS_PER_SQUARE / 4 - SFG_player.headBobFrame %
+-        (RCL_UNITS_PER_SQUARE / 4));
+-
+-    RCL_Unit currentFrame = SFG_player.headBobFrame;
+-    RCL_Unit nextFrame = SFG_player.headBobFrame + 16;
+-
+-    // only stop bobbing when we pass a frame at which sin crosses zero
+-    SFG_player.headBobFrame =
+-      (currentFrame / (RCL_UNITS_PER_SQUARE / 2) ==
+-       nextFrame / (RCL_UNITS_PER_SQUARE / 2)) ?
+-       nextFrame : 0;
++        (currentFrame / (RCL_UNITS_PER_SQUARE / 2) ==
++         nextFrame / (RCL_UNITS_PER_SQUARE / 2)) ?
++         nextFrame : 0;
++    }
+   }
+ #endif
+ 
+@@ -4513,7 +4535,7 @@
+ /**
+   Draws the player weapon, includes handling the shoot animation.
+ */
+-void SFG_drawWeapon(int16_t bobOffset)
++void SFG_drawWeapon(int16_t bobOffset, uint16_t swingPhase)
+ {
+   uint32_t animationLength =
+     RCL_max(SFG_MIN_WEAPON_COOLDOWN_FRAMES,
+@@ -4526,6 +4548,9 @@
+      
+   uint8_t fireType = SFG_GET_WEAPON_FIRE_TYPE(SFG_player.weapon);
+ 
++  uint16_t posX = SFG_WEAPON_IMAGE_POSITION_X + (RCL_sin(swingPhase) * 
++    (SFG_GAME_RESOLUTION_X / SFG_WEAPON_SWING_WIDTH)) / RCL_UNITS_PER_SQUARE;
++
+   if (shotAnimationFrame < animationLength)
+   {
+     if (fireType == SFG_WEAPON_FIRE_TYPE_MELEE)
+@@ -4544,7 +4569,7 @@
+          (fireType == SFG_WEAPON_FIRE_TYPE_BULLET)) &&
+         shotAnimationFrame < animationLength / 2)
+         SFG_blitImage(SFG_effectSprites,
+-          SFG_WEAPON_IMAGE_POSITION_X,
++          posX,
+           SFG_WEAPON_IMAGE_POSITION_Y -
+             (SFG_TEXTURE_SIZE / 3) * SFG_WEAPON_IMAGE_SCALE + bobOffset,
+           SFG_WEAPON_IMAGE_SCALE,
+@@ -4553,7 +4578,7 @@
+   }
+ 
+   SFG_blitImage(SFG_weaponImages + SFG_player.weapon * SFG_TEXTURE_STORE_SIZE,
+-  SFG_WEAPON_IMAGE_POSITION_X,
++  posX,
+   SFG_WEAPON_IMAGE_POSITION_Y + bobOffset - 1,
+   SFG_WEAPON_IMAGE_SCALE,0);
+ }
+@@ -5042,7 +5067,7 @@
+ #endif // head bob enabled?
+ 
+ #if SFG_PREVIEW_MODE == 0
+-    SFG_drawWeapon(weaponBobOffset);
++    SFG_drawWeapon(weaponBobOffset,SFG_player.weaponSwingPhase);
+ #endif
+ 
+     // draw HUD:
+diff -Naru 06/settings.h 07/settings.h
+--- 06/settings.h	2026-08-16 08:15:34.000000000 +0000
++++ 07/settings.h	2026-11-20 22:25:44.822692020 +0000
+@@ -431,6 +431,20 @@
+ #endif
+ 
+ /**
++  How wide should weapon swinging be, in fractions of horizontal resolution.
++*/
++#ifndef SFG_WEAPON_SWING_WIDTH
++  #define SFG_WEAPON_SWING_WIDTH 16
++#endif
++
++/**
++  Speed of weapon swinging, in phase increase per second (1024 = full phase).
++*/
++#ifndef SFG_WEAPON_SWING_SPEED
++  #define SFG_WEAPON_SWING_SPEED 512
++#endif
++
++/**
+   Whether levels background (in distance or transparent wall textures) should
+   be drawn. If turned off, the background will be constant color, which can 
+   noticably increase performance.
