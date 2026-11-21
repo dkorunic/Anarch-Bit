@@ -214,7 +214,7 @@ static void sampleBatt(){
 
 // Battery percentage exactly as Bit-Firmware BatteryRev3 / BatteryRev1 (ADCReader) compute it.
 static float battPercent(){
-	if(!battMonitor) return 100; // unknown: never shut down for it
+	if(!battMonitor || battEma < 0) return 100; // unknown (no calibration, or no reading yet): never shut down for it
 	float mV, lo, hi;
 	if(battCali){
 		mV = (int) (-1.1316f * (377.595f - (battEma * 4 + battOffset)));
