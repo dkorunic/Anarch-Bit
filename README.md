@@ -126,6 +126,9 @@ Ideas from [CGB-Bit](https://github.com/dkorunic/CGB-Bit), not yet measured on t
   `renderColumns` in `main/main.cpp`). Each column only reads the level and writes its own
   pixels, so the picture is exactly the one-core picture (the smoke test checks it).
   Sprites, the HUD and the game logic stay on the first core.
+- The per-column and per-pixel functions run from internal RAM (`ANARCH_IRAM` in
+  `main/CMakeLists.txt`, moved by `tools/iram_hot.sh` after the build), and `main.cpp` is
+  built with `-Os`.
 
 `idf.py monitor` prints `CPU load: N% (columns on core 1: M%), F FPS` every second: the first
 core's busy share (game, its columns, sending frames), the second core's columns, and the

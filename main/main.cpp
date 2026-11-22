@@ -8,6 +8,7 @@
 #include <freertos/semphr.h>
 #include <driver/gpio.h>
 #include <driver/ledc.h>
+#include <esp_attr.h>
 #include <esp_timer.h>
 #include <esp_efuse.h>
 #include <nvs_flash.h>
@@ -383,7 +384,7 @@ static void initBuzzer(){
 	ESP_ERROR_CHECK(esp_timer_create(&args, &sfxTimer));
 }
 
-void SFG_setPixel(uint16_t x, uint16_t y, uint8_t colorIndex){
+IRAM_ATTR void SFG_setPixel(uint16_t x, uint16_t y, uint8_t colorIndex){
 	frame[y * SFG_SCREEN_RESOLUTION_X + x] = palette[colorIndex];
 }
 
