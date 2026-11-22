@@ -1,7 +1,8 @@
 // Plays every level of the patched game with random input under ASan/UBSan, with the Bit's
 // settings, letting deaths, wins and level transitions run their course, and checks the quicksave
-// behaviour of mods/12-quicksave_store.diff and that rendering the columns on two threads (mod 13,
-// as the firmware's two cores do) gives exactly the one-thread picture. Run by smoke_test.sh.
+// behaviour of mods/12-quicksave_store.diff, that rendering the columns on two threads (mod 13, as
+// the firmware's two cores do) gives exactly the one-thread picture, and the PCM mixer (audio.h).
+// Run by smoke_test.sh.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +14,7 @@ static void store(){ stores++; }
 #define SFG_QUICKSAVE_STORE store
 #define RCL_CAST_RAYS_PARALLEL castColumns
 #include "game.h"
+#include "audio.h"
 
 // As main.cpp's renderColumns: odd columns on another thread (core 1), even ones on this one.
 static bool parallel = true;
@@ -38,11 +40,45 @@ uint32_t SFG_getTimeMs(){ return now; }
 void SFG_sleepMs(uint16_t){}
 int8_t SFG_keyPressed(uint8_t k){ return k < 7 ? keys[k] : 0; }
 void SFG_getMouseOffset(int16_t*, int16_t*){}
-void SFG_setMusic(uint8_t){}
+static Mixer mixer; // fed as main.cpp feeds it, so the sanitizers see it during play
+void SFG_setMusic(uint8_t v){ if(v == SFG_MUSIC_NEXT) SFG_nextMusicTrack(); else mixer.music = v == SFG_MUSIC_TURN_ON; }
 void SFG_processEvent(uint8_t, uint8_t){}
-void SFG_playSound(uint8_t, uint8_t){}
+void SFG_playSound(uint8_t i, uint8_t volume){ mixer.sound(i, volume); }
 void SFG_save(uint8_t*){}
 uint8_t SFG_load(uint8_t*){ return 1; }
+
+// Silence until something plays, then the bias ramp, Anarch's samples, a chirp's pitch, clipping.
+static void testMixer(){
+	static Mixer m; // static: 8 KB of effects
+	m.fill(800);
+	for(uint8_t v : m.ring) CHECK(v == 0); // idle: duty 0
+	m.sound(0, 255);
+	m.fill(m.written + 1);
+	CHECK(m.ring[800 % Mixer::RingSize] == std::clamp(1 + (128 - SFG_GET_SFX_SAMPLE(0, 0)), 0, 255)); // bias starts ramping
+	m.fill(m.written + 200);
+	for(uint32_t n = 928; n < 1000; n++){ // ramped up: 128 + the sample at full volume (x64, then >> 6)
+		const uint32_t i = n - 800; // a variable: SFG_GET_SFX_SAMPLE doesn't parenthesise its arguments
+		CHECK(m.ring[n % Mixer::RingSize] == std::clamp(128 + (128 - SFG_GET_SFX_SAMPLE(0, i)), 0, 255));
+	}
+	m.fill(m.written + 2 * SFG_SFX_SAMPLE_COUNT); // the effect ends, the bias ramps back to 0
+	CHECK(m.ring[(m.written - 1) % Mixer::RingSize] == 0);
+
+	// ChirpGood: 400 -> 600 Hz in 50 ms, so about 25 periods, 50 level changes
+	static Mixer c;
+	c.chirp(ChirpGood, 255);
+	c.fill(Mixer::Rate * 50 / 1000);
+	int changes = 0;
+	for(uint32_t n = 1; n < c.written; n++) changes += (c.ring[n] > c.ring[n - 1] + 2) || (c.ring[n] + 2 < c.ring[n - 1]);
+	CHECK(changes >= 48 && changes <= 52);
+
+	for(int i = 0; i < 8; i++) m.sound(2, 255); // eight explosions at once: clipped, never wrapped
+	m.fill(m.written + 3000);
+	m.music = true; // music runs Anarch's bytebeat
+	const uint32_t t = SFG_MusicState.t;
+	m.fill(m.written + 100);
+	CHECK(SFG_MusicState.t == t + 100);
+	m.music = false;
+}
 
 // Draws the current frame on one thread and on two and checks the pictures are the same.
 static bool sameOnTwoThreads(){
@@ -56,6 +92,8 @@ static bool sameOnTwoThreads(){
 }
 
 int main(){
+	testMixer();
+	printf("mixer: ok\n");
 	srand(1);
 	int threadChecks = 0;
 	SFG_init();
@@ -92,6 +130,7 @@ int main(){
 			if(f == 5000) SFG_winLevel(); // random play never finishes a level: run the win, save and next-level path
 			now += 1000 / SFG_FPS + (f % 3 != 0);
 			SFG_mainLoopBody();
+			mixer.fill(now * 8); // 8 samples per ms
 			if(f % 25 == 0 && SFG_game.state == SFG_GAME_STATE_PLAYING){
 				CHECK(sameOnTwoThreads());
 				threadChecks++;

@@ -99,17 +99,20 @@ go to their own `quicksave` flash partition and survive power-off, auto-sleep an
 shutdown. A quicksave is only loaded by the same firmware build that wrote it (it holds
 pointers into the firmware), so reflashing a different build discards it.
 
-## Not ported
+## Sound
 
-- Music (a buzzer can't play the sampled tracks). Sound effects are short frequency
-  sweeps like the stock firmware's chirps; tweak them in the `sounds` table in `main/main.cpp`.
+Anarch's own sound effects and its bytebeat music (on/off in Anarch's settings menu, as is
+sound) play as 8 kHz PCM on the buzzer: `main/audio.h` mixes them as Anarch's SDL front end
+does, and a timer interrupt on the second core sets each sample as the buzzer's PWM duty
+(8-bit, 156 kHz, far above hearing). While nothing plays the buzzer idles at duty 0. An
+experiment: earlier versions played each effect as a frequency sweep instead.
 
 ## Taken from the stock firmware
 
 - Boot: CircuitMess splash (`main/Splash.bmp`, from Bit-Firmware's `spiffs_image`),
   backlight fade-in and the stock boot jingle; the splash stays 2 s, then fades into the game.
-- Jingles from the stock firmware: item pickup ("good" chirp), level won, player died.
-  They follow Anarch's own sound on/off setting.
+- Jingles from the stock firmware: item pickup ("good" chirp), level won, player died, mixed
+  in as square waves (`Chirps` in `main/audio.h`). They follow Anarch's own sound on/off setting.
 - Backlight fades out before sleep/shutdown. Brightness is `Brightness` (0-100,
   default 100 like stock) in `main/main.cpp`; lower it to save battery.
 
@@ -158,8 +161,8 @@ ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
   (the build runs it too).
 - `tools/smoke_test.sh`: plays all 10 levels of the patched game with random input under
   ASan/UBSan (deaths, a forced win per level, level transitions), rendering on two threads
-  as the firmware's two cores do, and checks the quicksave behaviour of mod 12 and that frames
-  drawn on two threads match one-thread frames exactly; about a minute.
+  as the firmware's two cores do, and checks the quicksave behaviour of mod 12, that frames
+  drawn on two threads match one-thread frames exactly, and the PCM mixer; about a minute.
 - `tools/make_demo.sh`: regenerates `demo.gif`. The run is scripted in frames, so changes
   that affect movement or aiming may need `tools/demo.cpp` retuned.
 - `web/build.sh <dir> <anarch-bit-merged.bin> <version>`: assembles the browser installer

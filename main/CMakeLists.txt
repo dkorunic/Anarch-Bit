@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.cpp"
                        EMBED_FILES "Splash.bmp"
-                       PRIV_REQUIRES esp_driver_ledc esp_driver_gpio esp_timer nvs_flash efuse esp_adc esp_partition app_update)
+                       PRIV_REQUIRES esp_driver_ledc esp_driver_gpio esp_driver_gptimer hal esp_timer nvs_flash efuse esp_adc esp_partition app_update)
 
 # Anarch from the submodule, patched with mods/*.diff into the build dir by tools/patch_anarch.sh,
 # so the submodule stays clean. Re-runs when a source or mod changes; a new mod file is picked up too.

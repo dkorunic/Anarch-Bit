@@ -8,6 +8,8 @@
 #include <freertos/semphr.h>
 #include <driver/gpio.h>
 #include <driver/ledc.h>
+#include <driver/gptimer.h>
+#include <hal/ledc_ll.h>
 #include <esp_attr.h>
 #include <esp_timer.h>
 #include <esp_efuse.h>
@@ -31,6 +33,7 @@ static void quickSaveStore();
 #define RCL_CAST_RAYS_PARALLEL renderColumns // mods/13-parallel_columns.diff: the columns on both cores
 
 #include "game.h"
+#include "audio.h"
 
 // Pin numbers from Bit-Firmware Pins.cpp: rev 0-2 = Bit / Bit 2, rev 3-4 = Bit 3.
 struct BitPins { int up, down, left, right, a, b, menu, bl, buzz, sck, mosi, dc, rst, batt, vref; };
@@ -51,26 +54,15 @@ static lgfx::Bus_SPI bus;
 static lgfx::Panel_ST7735S panel;
 static LGFX_Device lcd;
 
-// Sounds as frequency sweeps, the way Bit-Firmware's ChirpSystem plays them: { start Hz, end Hz, ms }.
-// 0 Hz is a pause; a sound ends at its first 0 ms entry.
-struct Chirp { int16_t from, to, ms; };
-static constexpr int MaxChirps = 10;
-enum { SoundGood = 6, SoundWin, SoundLose, SoundBoot };
-static constexpr Chirp sounds[][MaxChirps] = {
-	{ { 900, 150, 60 } },  // 0 shot
-	{ { 150, 300, 120 } }, // 1 door
-	{ { 400, 50, 200 } },  // 2 explosion
-	{ { 600, 800, 20 } },  // 3 click
-	{ { 300, 1200, 80 } }, // 4 plasma
-	{ { 400, 250, 80 } },  // 5 monster
-	{ { 400, 600, 50 } },  // SoundGood: RoboCtrl::Buttons::playGood
-	{ { 600, 400, 200 }, { 400, 1000, 200 } }, // SoundWin: Buttons::playWin
-	{ { 400, 300, 200 }, { 0, 0, 50 }, { 300, 200, 200 }, { 0, 0, 50 }, { 200, 50, 400 } }, // SoundLose: Buttons::playLose
-	{ { 294, 440, 100 }, { 0, 0, 50 }, { 587, 587, 100 }, { 0, 0, 50 }, { 440, 440, 100 }, // SoundBoot: stock boot jingle
-	  { 0, 0, 50 }, { 784, 392, 100 }, { 0, 0, 50 }, { 294, 440, 100 }, { 587, 587, 100 } },
-};
-static std::atomic<int> sfxRequest{ -1 }; // (index << 8) | volume, posted by playSound, taken by sfxStep
-static esp_timer_handle_t sfxTimer;
+// Sound: core 0 mixes Anarch's effects, music and the chirps into mixer.ring (audio.h), PcmLead
+// samples ahead of what plays; a timer interrupt on core 1 sets each sample as the buzzer's PWM duty
+// (8-bit at 156 kHz, far above hearing), 8000 times a second.
+static Mixer mixer;
+static constexpr uint32_t PcmLead = 400; // 50 ms: longer than the longest frame or sleep between fills
+static std::atomic<uint32_t> pcmPlayed, pcmReady; // samples played (interrupt) and mixed (core 0)
+static gptimer_handle_t pcmTimer;
+static void audioFill();
+static void audioOff();
 
 // The ray casting's odd columns on core 1 (mods/13-parallel_columns.diff), while core 0 does the
 // even ones; see renderColumns.
@@ -187,11 +179,13 @@ static void backlightFade(uint32_t to){
 	for(int i = 1; i <= 100; i++){
 		backlightSet(from + ((int) to - from) * i / 100);
 		vTaskDelay(pdMS_TO_TICKS(2));
+		audioFill(); // the fade takes 200 ms, longer than the sound buffered ahead
 	}
 }
 
 // Same as Bit-Firmware shutdown(): park the pins so nothing leaks current, then sleep until power cycle.
 [[noreturn]] static void shutdown(){
+	audioOff();
 	backlightFade(0);
 	const struct { int pin, level; gpio_pull_mode_t pull; } park[] = {
 		{ pins.bl, 1, GPIO_PULLUP_ONLY }, { pins.buzz, 0, GPIO_PULLDOWN_ONLY }, { pins.vref, 0, GPIO_PULLDOWN_ONLY } };
@@ -288,56 +282,50 @@ static void buzzerDuty(uint32_t duty){
 	ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
-// Runs on the esp_timer task, the only code that drives the buzzer while a sound plays.
-static void sfxStep(void*){
-	static const Chirp* s = nullptr; // sound being played
-	static int seg;
-	static int64_t segStart;
-	static uint32_t duty;
-	const int64_t now = esp_timer_get_time();
-	bool segChanged = false;
-
-	const int req = sfxRequest.exchange(-1);
-	if(req >= 0){
-		s = sounds[req >> 8];
-		seg = 0;
-		segStart = now;
-		duty = (req & 0xff) * 2; // at most ~50% duty = loudest
-		segChanged = true;
-	}
-	if(!s) return;
-
-	while(now - segStart >= s[seg].ms * 1000){
-		segStart += s[seg].ms * 1000;
-		if(++seg == MaxChirps || s[seg].ms == 0){
-			buzzerDuty(0);
-			s = nullptr;
-			return;
-		}
-		segChanged = true;
-	}
-
-	const Chirp& c = s[seg];
-	const int64_t elapsed = now - segStart, left = c.ms * 1000 - elapsed;
-	if(c.from == 0){
-		if(segChanged) buzzerDuty(0);
-		esp_timer_start_once(sfxTimer, left);
-		return;
-	}
-	const uint32_t freq = c.from + (c.to - c.from) * elapsed / (c.ms * 1000);
-	ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq);
-	if(segChanged) buzzerDuty(duty);
-	// Hold each step for at least one period of the tone and 5 ms (ChirpSystem), but end the segment on time.
-	esp_timer_start_once(sfxTimer, std::min(left, std::max<int64_t>(5000, 1000000 / freq)));
+// One sample per tick, from the ring core 0 fills; if it ever runs dry, the last level holds.
+// Writes the duty registers directly: the three writes ledc_set_duty/ledc_update_duty make,
+// without the driver's lock, cheap enough for 8000 interrupts a second.
+static bool IRAM_ATTR pcmTick(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*){
+	const uint32_t n = pcmPlayed.load(std::memory_order_relaxed);
+	if(n == pcmReady.load(std::memory_order_acquire)) return false;
+	ledc_dev_t* hw = LEDC_LL_GET_HW();
+	ledc_ll_set_duty_int_part(hw, LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, mixer.ring[n % Mixer::RingSize]);
+	ledc_ll_set_duty_start(hw, LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, true);
+	ledc_ll_ls_channel_update(hw, LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+	pcmPlayed.store(n + 1, std::memory_order_release);
+	return false;
 }
 
-static void playSound(int index, uint8_t volume){
-	sfxRequest = index << 8 | volume;
-	esp_timer_start_once(sfxTimer, 0); // fails if a sound is running; its next step picks the request up
+// Core 0 only (the mixer runs Anarch's music and reads its state): mixes up to PcmLead ahead.
+static void audioFill(){
+	mixer.fill(pcmPlayed.load(std::memory_order_acquire) + PcmLead);
+	pcmReady.store(mixer.written, std::memory_order_release);
 }
 
-// Pinned to core 1: casts the odd columns of each frame renderColumns hands over.
+static void audioOff(){
+	if(!pcmTimer) return; // not started yet (an empty battery at boot): the buzzer was never driven
+	gptimer_stop(pcmTimer);
+	buzzerDuty(0);
+}
+
+// Pinned to core 1: starts the sound interrupt there (allocated on the core that enables it, away
+// from the game), then casts the odd columns of each frame renderColumns hands over.
 static void columnTask(void*){
+	gptimer_config_t t = {};
+	t.clk_src = GPTIMER_CLK_SRC_DEFAULT;
+	t.direction = GPTIMER_COUNT_UP;
+	t.resolution_hz = 1000000;
+	ESP_ERROR_CHECK(gptimer_new_timer(&t, &pcmTimer));
+	gptimer_event_callbacks_t cb = {};
+	cb.on_alarm = pcmTick;
+	ESP_ERROR_CHECK(gptimer_register_event_callbacks(pcmTimer, &cb, nullptr));
+	ESP_ERROR_CHECK(gptimer_enable(pcmTimer));
+	gptimer_alarm_config_t alarm = {};
+	alarm.alarm_count = 1000000 / Mixer::Rate;
+	alarm.flags.auto_reload_on_alarm = true;
+	ESP_ERROR_CHECK(gptimer_set_alarm_action(pcmTimer, &alarm));
+	ESP_ERROR_CHECK(gptimer_start(pcmTimer));
+
 	while(true){
 		xSemaphoreTake(columnsGo, portMAX_DELAY);
 		const int64_t start = esp_timer_get_time();
@@ -364,10 +352,9 @@ static void initBuzzer(){
 	t.speed_mode = LEDC_LOW_SPEED_MODE;
 	t.duty_resolution = LEDC_TIMER_10_BIT;
 	t.timer_num = LEDC_TIMER_0;
-	t.freq_hz = 1000;
-	// 40 MHz crystal: 10-bit duty reaches 38 Hz-39 kHz. Auto picked the 80 MHz APB clock for
-	// 1000 Hz, whose divider can't go below ~76 Hz, so the 50 Hz sweep ends failed.
-	t.clk_cfg = LEDC_USE_XTAL_CLK;
+	t.duty_resolution = LEDC_TIMER_8_BIT; // the PCM samples' 8 bits, 40 MHz / 256 = 156.25 kHz
+	t.freq_hz = 156250;
+	t.clk_cfg = LEDC_USE_XTAL_CLK; // S3: one clock source for all LEDC timers (the backlight's too)
 	ESP_ERROR_CHECK(ledc_timer_config(&t));
 
 	ledc_channel_config_t c = {};
@@ -377,11 +364,7 @@ static void initBuzzer(){
 	c.timer_sel = LEDC_TIMER_0;
 	c.duty = 0;
 	ESP_ERROR_CHECK(ledc_channel_config(&c));
-
-	esp_timer_create_args_t args = {};
-	args.callback = sfxStep;
-	args.name = "sfx";
-	ESP_ERROR_CHECK(esp_timer_create(&args, &sfxTimer));
+	buzzerDuty(0); // also sets the duty step registers pcmTick leaves as they are
 }
 
 IRAM_ATTR void SFG_setPixel(uint16_t x, uint16_t y, uint8_t colorIndex){
@@ -403,20 +386,23 @@ int8_t SFG_keyPressed(uint8_t key){
 
 void SFG_getMouseOffset(int16_t* x, int16_t* y){}
 
-void SFG_setMusic(uint8_t value){} // shortcut: no music, a buzzer can't play the sampled tracks well
+void SFG_setMusic(uint8_t value){
+	if(value == SFG_MUSIC_NEXT) SFG_nextMusicTrack();
+	else mixer.music = value == SFG_MUSIC_TURN_ON;
+}
 
 void SFG_processEvent(uint8_t event, uint8_t data){
 	if(!(SFG_game.settings & 0x01)) return; // Anarch's sound setting, checked like SFG_playGameSound does
 	switch(event){
-		case SFG_EVENT_PLAYER_TAKES_ITEM: playSound(SoundGood, 255); break;
-		case SFG_EVENT_LEVEL_WON: playSound(SoundWin, 255); break;
-		case SFG_EVENT_PLAYER_DIES: playSound(SoundLose, 255); break;
+		case SFG_EVENT_PLAYER_TAKES_ITEM: mixer.chirp(ChirpGood, 255); break;
+		case SFG_EVENT_LEVEL_WON: mixer.chirp(ChirpWin, 255); break;
+		case SFG_EVENT_PLAYER_DIES: mixer.chirp(ChirpLose, 255); break;
 		default: break;
 	}
 }
 
 void SFG_playSound(uint8_t soundIndex, uint8_t volume){
-	if(soundIndex < SoundGood) playSound(soundIndex, volume);
+	mixer.sound(soundIndex, volume);
 }
 
 static const esp_partition_t* quickSavePartition(){
@@ -528,8 +514,11 @@ extern "C" void app_main(){
 	const uint32_t splashTime = SFG_getTimeMs();
 	SFG_init();
 	quickSaveLoad();
-	if(SFG_game.settings & 0x01) playSound(SoundBoot, 255);
-	while(SFG_getTimeMs() - splashTime < 2000) vTaskDelay(pdMS_TO_TICKS(10));
+	if(SFG_game.settings & 0x01) mixer.chirp(ChirpBoot, 255);
+	while(SFG_getTimeMs() - splashTime < 2000){
+		audioFill();
+		vTaskDelay(pdMS_TO_TICKS(10));
+	}
 	backlightFade(0);
 
 	SFG_game.frameTime = SFG_getTimeMs(); // SFG_init set 0: don't catch up on the splash time in the first frame
@@ -560,7 +549,7 @@ extern "C" void app_main(){
 			sampleBatt();
 			lowBattery = battPercent() < 15;
 			if(battPercent() < 1){
-				buzzerDuty(0);
+				audioOff();
 				backlightSet(blFull);
 				lcd.fillScreen(TFT_BLACK);
 				lcd.setTextColor(TFT_WHITE);
@@ -576,6 +565,7 @@ extern "C" void app_main(){
 		const bool init = SFG_game.state == SFG_GAME_STATE_INIT; // waits for A/B release, draws nothing
 		const int64_t start = esp_timer_get_time();
 		SFG_mainLoopBody();
+		audioFill();
 		if(init) vTaskDelay(1);
 		else if(!slept){
 			// LovyanGFX waits for the previous transfer itself; the game then draws into the other buffer.
