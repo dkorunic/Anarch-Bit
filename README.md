@@ -47,7 +47,8 @@ A new or updated mod must apply on top of the previous ones: make it against the
 
 The easiest way is the [browser installer](https://dkorunic.github.io/Anarch-Bit/) (ESP Web
 Tools, built on Espressif's esptool-js; needs desktop Chrome, Edge or Opera for Web Serial).
-It always flashes the latest release's complete image, which erases saved progress.
+It flashes the latest release and keeps saved progress (unlocked levels, settings) unless you
+tick "Erase device" (it splits the image around the NVS partition the saves live in).
 
 Every `v*` tag also gets a [release](https://github.com/dkorunic/Anarch-Bit/releases) with
 two files built by CI:

@@ -113,6 +113,11 @@ textures are read from flash every frame). Fallbacks if load stays over 100%:
 
 - `tools/demo.cpp` plays a frame-scripted run of level 1 (one-thread rendering); changes that
   affect movement or aiming may need its script retuned before regenerating `demo.gif`.
+- Browser installer (`web/`, ESP Web Tools 10.4.0 served from the site, hash-pinned in
+  `web/build.sh`): `"new_install_prompt_erase": true` in `web/manifest.json` is essential (no
+  Improv Serial: without it every install erases the whole chip). `web/build.sh` cuts the merged
+  image into the bootloader + partition table (up to NVS at 0x9000) and the app (0x10000), so
+  NVS saves survive; it fails if the left-out range isn't pure padding (partitions moved).
 - CI (`.github/workflows/build.yml`): smoke test, then firmware in a digest-pinned
   `espressif/idf:v5.4.1` container; `v*` tags also make a release and deploy the installer to
   GitHub Pages. Actions are pinned to commit SHAs with the version in a comment; Dependabot
