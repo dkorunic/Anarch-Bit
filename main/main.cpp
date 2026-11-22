@@ -34,6 +34,7 @@ static void quickSaveStore();
 
 #include "game.h"
 #include "audio.h"
+#include "resume.h"
 
 // Pin numbers from Bit-Firmware Pins.cpp: rev 0-2 = Bit / Bit 2, rev 3-4 = Bit 3.
 struct BitPins { int up, down, left, right, a, b, menu, bl, buzz, sck, mosi, dc, rst, batt, vref; };
@@ -81,11 +82,14 @@ static uint32_t blFull; // duty for Brightness
 extern const uint8_t splashStart[] asm("_binary_Splash_bmp_start"); // Bit-Firmware spiffs_image/Splash.bmp
 extern const uint8_t splashEnd[] asm("_binary_Splash_bmp_end");
 
-// Quicksave partition: [firmware ELF SHA-256][SFG_Game][SFG_Player][SFG_CurrentLevel]. The snapshot holds pointers
-// into this build's flash, so only the exact same build loads it. The hash goes in last: a torn write never loads.
+// Quicksave partition: two snapshots, each [firmware ELF SHA-256][SFG_Game][SFG_Player][SFG_CurrentLevel]: the
+// player's quicksave at 0, the game to resume (resume.h) at ResumeAt. A snapshot holds pointers into this build's
+// flash, so only the exact same build loads it. The hash goes in last: a torn write never loads.
 static constexpr size_t QsHash = 32, QsPlayer = QsHash + sizeof(SFG_Game), QsLevel = QsPlayer + sizeof(SFG_Player),
-	QsEnd = QsLevel + sizeof(SFG_CurrentLevel);
-static_assert(QsEnd <= 64 * 1024, "grow the quicksave partition in partitions.csv");
+	QsEnd = QsLevel + sizeof(SFG_CurrentLevel), ResumeAt = 0x8000;
+static_assert(QsEnd <= ResumeAt && ResumeAt + QsEnd <= 64 * 1024, "grow the quicksave partition in partitions.csv");
+static bool running; // the game loop runs: shutdown() stores the game to resume
+static bool snapshotStore(size_t at, const SFG_Game& game, const SFG_Player& player, const SFG_CurrentLevel& level);
 
 static bool lowBattery; // stock BatteryElement blinks its empty icon below 15 %
 
@@ -186,6 +190,7 @@ static void backlightFade(uint32_t to){
 // Same as Bit-Firmware shutdown(): park the pins so nothing leaks current, then sleep until power cycle.
 [[noreturn]] static void shutdown(){
 	audioOff();
+	if(running && resumable()) printf("Resume %s\n", snapshotStore(ResumeAt, SFG_game, SFG_player, SFG_currentLevel) ? "stored" : "store failed");
 	backlightFade(0);
 	const struct { int pin, level; gpio_pull_mode_t pull; } park[] = {
 		{ pins.bl, 1, GPIO_PULLUP_ONLY }, { pins.buzz, 0, GPIO_PULLDOWN_ONLY }, { pins.vref, 0, GPIO_PULLDOWN_ONLY } };
@@ -407,30 +412,48 @@ void SFG_playSound(uint8_t soundIndex, uint8_t volume){
 
 static const esp_partition_t* quickSavePartition(){
 	const esp_partition_t* p = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t) 0x40, "quicksave");
-	return p && p->size >= QsEnd ? p : nullptr;
+	return p && p->size >= ResumeAt + QsEnd ? p : nullptr;
+}
+
+static bool snapshotStore(size_t at, const SFG_Game& game, const SFG_Player& player, const SFG_CurrentLevel& level){
+	const esp_partition_t* p = quickSavePartition();
+	return p && esp_partition_erase_range(p, at, (QsEnd + 4095) & ~4095u) == ESP_OK
+		&& esp_partition_write(p, at + QsHash, &game, sizeof(SFG_Game)) == ESP_OK
+		&& esp_partition_write(p, at + QsPlayer, &player, sizeof(SFG_Player)) == ESP_OK
+		&& esp_partition_write(p, at + QsLevel, &level, sizeof(SFG_CurrentLevel)) == ESP_OK
+		&& esp_partition_write(p, at, esp_app_get_description()->app_elf_sha256, QsHash) == ESP_OK;
+}
+
+// False if there is none this build wrote, or it couldn't be read whole.
+static bool snapshotLoad(size_t at, SFG_Game& game, SFG_Player& player, SFG_CurrentLevel& level){
+	const esp_partition_t* p = quickSavePartition();
+	uint8_t hash[QsHash];
+	return p && esp_partition_read(p, at, hash, QsHash) == ESP_OK
+		&& memcmp(hash, esp_app_get_description()->app_elf_sha256, QsHash) == 0
+		&& esp_partition_read(p, at + QsHash, &game, sizeof(SFG_Game)) == ESP_OK
+		&& esp_partition_read(p, at + QsPlayer, &player, sizeof(SFG_Player)) == ESP_OK
+		&& esp_partition_read(p, at + QsLevel, &level, sizeof(SFG_CurrentLevel)) == ESP_OK;
 }
 
 static void quickSaveStore(){
-	const esp_partition_t* p = quickSavePartition();
-	if(!p) return;
-	const bool ok = esp_partition_erase_range(p, 0, (QsEnd + 4095) & ~4095u) == ESP_OK
-		&& esp_partition_write(p, QsHash, &SFG_quickSaveGame, sizeof(SFG_Game)) == ESP_OK
-		&& esp_partition_write(p, QsPlayer, &SFG_quickSavePlayer, sizeof(SFG_Player)) == ESP_OK
-		&& esp_partition_write(p, QsLevel, &SFG_quickSaveCurrentLevel, sizeof(SFG_CurrentLevel)) == ESP_OK
-		&& esp_partition_write(p, 0, esp_app_get_description()->app_elf_sha256, QsHash) == ESP_OK;
+	const bool ok = snapshotStore(0, SFG_quickSaveGame, SFG_quickSavePlayer, SFG_quickSaveCurrentLevel);
 	printf("Quicksave %s\n", ok ? "stored" : "store failed, kept in RAM only");
 }
 
 // After SFG_init (which marks "no quicksave"): bring back the stored one, if this build wrote it.
 static void quickSaveLoad(){
-	const esp_partition_t* p = quickSavePartition();
-	uint8_t hash[QsHash];
-	if(!p || esp_partition_read(p, 0, hash, QsHash) != ESP_OK
-		|| memcmp(hash, esp_app_get_description()->app_elf_sha256, QsHash) != 0) return;
-	const bool ok = esp_partition_read(p, QsHash, &SFG_quickSaveGame, sizeof(SFG_Game)) == ESP_OK
-		&& esp_partition_read(p, QsPlayer, &SFG_quickSavePlayer, sizeof(SFG_Player)) == ESP_OK
-		&& esp_partition_read(p, QsLevel, &SFG_quickSaveCurrentLevel, sizeof(SFG_CurrentLevel)) == ESP_OK;
-	if(!ok) SFG_quickSaveGame.frame = 0;
+	if(!snapshotLoad(0, SFG_quickSaveGame, SFG_quickSavePlayer, SFG_quickSaveCurrentLevel)) SFG_quickSaveGame.frame = 0;
+}
+
+// The game stored at the last auto-sleep or low-battery shutdown, resumed once: its hash is erased
+// before it resumes, so after a later power cut (the power switch skips shutdown) the game starts
+// afresh, not back here. An erase that fails means no resume, never one over and over.
+static void resume(){
+	const bool ok = resumeGame([](SFG_Game& game, SFG_Player& player, SFG_CurrentLevel& level){
+		return snapshotLoad(ResumeAt, game, player, level)
+			&& esp_partition_erase_range(quickSavePartition(), ResumeAt, 0x1000) == ESP_OK;
+	}, quickSaveLoad);
+	if(ok) printf("Resumed\n");
 }
 
 // Small blinking red battery in the top-right corner of the frame about to be sent.
@@ -522,6 +545,8 @@ extern "C" void app_main(){
 	backlightFade(0);
 
 	SFG_game.frameTime = SFG_getTimeMs(); // SFG_init set 0: don't catch up on the splash time in the first frame
+	resume(); // after frameTime: the level clock is rebased to it
+	running = true;
 	lcd.startWrite(); // keep the bus so pushImageDMA returns while the transfer runs
 	bool lit = false, dimmed = false;
 	uint32_t tickTime = SFG_getTimeMs(), activityTime = tickTime, statTime = tickTime, busyUs = 0, framesDrawn = 0;

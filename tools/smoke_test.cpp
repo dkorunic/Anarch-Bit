@@ -1,8 +1,8 @@
 // Plays every level of the patched game with random input under ASan/UBSan, with the Bit's
 // settings, letting deaths, wins and level transitions run their course, and checks the quicksave
 // behaviour of mods/12-quicksave_store.diff, that rendering the columns on two threads (mod 13, as
-// the firmware's two cores do) gives exactly the one-thread picture, and the PCM mixer (audio.h).
-// Run by smoke_test.sh.
+// the firmware's two cores do) gives exactly the one-thread picture, the PCM mixer (audio.h) and
+// resuming after a shutdown (resume.h). Run by smoke_test.sh.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +15,7 @@ static void store(){ stores++; }
 #define RCL_CAST_RAYS_PARALLEL castColumns
 #include "game.h"
 #include "audio.h"
+#include "resume.h"
 
 // As main.cpp's renderColumns: odd columns on another thread (core 1), even ones on this one.
 static bool parallel = true;
@@ -80,6 +81,35 @@ static void testMixer(){
 	m.music = false;
 }
 
+// As main.cpp's shutdown() and the next boot: snapshot the game, start afresh (SFG_init), resume.
+static int resumes;
+static void rebootAndResume(){
+	static SFG_Game g, qg;
+	static SFG_Player p, qp;
+	static SFG_CurrentLevel l, ql;
+	g = SFG_game; p = SFG_player; l = SFG_currentLevel; // the resume snapshot
+	qg = SFG_quickSaveGame; qp = SFG_quickSavePlayer; ql = SFG_quickSaveCurrentLevel; // the stored quicksave
+	const uint32_t levelTime = SFG_game.frameTime - SFG_currentLevel.timeStart;
+	auto loadQuickSave = [&]{ SFG_quickSaveGame = qg; SFG_quickSavePlayer = qp; SFG_quickSaveCurrentLevel = ql; };
+
+	SFG_init();
+	now += 3000; // the next boot, a while later
+	SFG_game.frameTime = now;
+	// Nothing to resume: the game stays at its start, the quicksave is read back.
+	CHECK(!resumeGame([](SFG_Game&, SFG_Player&, SFG_CurrentLevel&){ return false; }, loadQuickSave));
+	CHECK(SFG_currentLevel.levelPointer == 0 && SFG_quickSaveGame.frame == qg.frame);
+
+	CHECK(resumeGame([&](SFG_Game& game, SFG_Player& player, SFG_CurrentLevel& level){
+		game = g; player = p; level = l;
+		return true;
+	}, loadQuickSave));
+	CHECK(SFG_game.state == g.state && SFG_currentLevel.levelNumber == l.levelNumber && SFG_player.health == p.health);
+	CHECK(SFG_player.camera.position.x == p.camera.position.x && SFG_player.camera.position.y == p.camera.position.y);
+	CHECK(SFG_game.frameTime - SFG_currentLevel.timeStart == levelTime); // the level clock rebased to this boot
+	CHECK(SFG_quickSaveGame.frame == qg.frame && SFG_quickSavePlayer.camera.position.x == qp.camera.position.x); // still the player's
+	resumes++;
+}
+
 // Draws the current frame on one thread and on two and checks the pictures are the same.
 static bool sameOnTwoThreads(){
 	static uint8_t one[sizeof(screen)];
@@ -104,6 +134,7 @@ int main(){
 		RCL_Vector2D savedPosition{};
 		uint32_t savedLevelTime = 0;
 		int stuck = 0, deaths = 0, wins = 0;
+		bool resumed = false;
 		for(int f = 0; f < 6000; f++){ // 100 s of game time per level
 			if(f % 15 == 0) for(auto& k : keys) k = rand() % 3 == 0;
 			keys[SFG_KEY_C] = 0; // stay out of the menu
@@ -111,6 +142,10 @@ int main(){
 				SFG_quickSave();
 				savedPosition = SFG_player.camera.position;
 				savedLevelTime = SFG_game.frameTime - SFG_currentLevel.timeStart;
+			}
+			if(f >= 3000 && f < 4000 && !resumed && resumable()){ // auto-sleep, then switched back on
+				rebootAndResume();
+				resumed = true;
 			}
 			if(f == 4000){
 				// quickload restores the level but keeps current progress and settings (mod 12)
@@ -157,6 +192,8 @@ int main(){
 	CHECK(statesSeen >> SFG_GAME_STATE_LOSE & 1 && statesSeen >> SFG_GAME_STATE_WIN & 1); // both paths ran
 	CHECK(stores == SFG_NUMBER_OF_LEVELS); // every quicksave reached the front end's storage hook
 	CHECK(threadChecks > 1000);
+	CHECK(resumes >= SFG_NUMBER_OF_LEVELS / 2);
+	printf("%d of %d levels resumed after a shutdown\n", resumes, SFG_NUMBER_OF_LEVELS);
 	printf("%d frames drawn identically on one and two threads\n", threadChecks);
 	printf("smoke test passed\n");
 }

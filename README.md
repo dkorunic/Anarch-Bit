@@ -142,15 +142,18 @@ frames drawn. If the load stays above ~100% the game can't keep `SFG_FPS`; set
 
 Like the stock default, after 2 minutes without any button held the Bit goes to deep
 sleep (`SleepMs` in `main/main.cpp`). 10 s before that the screen dims as a warning;
-any button brings it back. Toggle the power switch to start again. Progress
-inside the current level is lost; unlocked levels are kept.
+any button brings it back. Toggle the power switch to start again: a game left in a
+level (playing, or in its game menu) carries on from where it slept, once. Switching off
+with the power switch cuts power at once, so the next start is the main menu (unlocked
+levels and the quicksave are kept either way). A firmware update starts afresh too.
 
 ## Low battery
 
 Below 15% a small red battery blinks in the top-right corner (as stock blinks its empty
 battery icon). Otherwise same as stock firmware: below ~5% at power-on the Bit goes straight to deep sleep;
 while playing, at ~1% it shows "Battery critical, shutting down" for 6 s, then
-deep-sleeps. Charge it and toggle the power switch to start again.
+deep-sleeps; like auto-sleep, it keeps the game to resume. Charge it and toggle the power
+switch to start again.
 
 ## Development
 
@@ -161,8 +164,9 @@ ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
   (the build runs it too).
 - `tools/smoke_test.sh`: plays all 10 levels of the patched game with random input under
   ASan/UBSan (deaths, a forced win per level, level transitions), rendering on two threads
-  as the firmware's two cores do, and checks the quicksave behaviour of mod 12, that frames
-  drawn on two threads match one-thread frames exactly, and the PCM mixer; about a minute.
+  as the firmware's two cores do, and checks the quicksave behaviour of mod 12, resuming
+  after a shutdown, that frames drawn on two threads match one-thread frames exactly, and
+  the PCM mixer; about a minute.
 - `tools/make_demo.sh`: regenerates `demo.gif`. The run is scripted in frames, so changes
   that affect movement or aiming may need `tools/demo.cpp` retuned.
 - `web/build.sh <dir> <anarch-bit-merged.bin> <version>`: assembles the browser installer

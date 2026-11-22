@@ -29,9 +29,10 @@ web/build.sh <out dir> build/anarch-bit-merged.bin <version>   # browser install
 ```
 
 `tools/smoke_test.cpp` is one program with no per-check selection: `testMixer()`, then every level
-played with random input (deaths, a forced win per level, quicksave/quickload of mod 12), drawing
-the columns on two threads and every 25th playing frame checked pixel-identical to a one-thread
-draw. To run part of it, edit `main()` temporarily.
+played with random input (deaths, a forced win per level, quicksave/quickload of mod 12, a
+simulated shutdown and resume via `rebootAndResume()`), drawing the columns on two threads and
+every 25th playing frame checked pixel-identical to a one-thread draw. To run part of it, edit
+`main()` temporarily.
 
 ## Architecture
 
@@ -45,6 +46,8 @@ draw. To run part of it, edit `main()` temporarily.
   `SFG_RAYCASTING_SUBSAMPLE`, ...), shared by the firmware, the smoke test and the demo tool.
 - `main/audio.h`: the PCM `Mixer` (no ESP-IDF dependency, tested by the smoke test). Include
   `game.h` before it; it includes Anarch's `sounds.h` itself.
+- `main/resume.h`: when shutdown stores the game (`resumable()`) and how boot resumes it
+  (`resumeGame()`), shared with the smoke test; `main.cpp` does the flash I/O.
 - `mods/NN-name.diff`: applied in name order by `tools/patch_anarch.sh` with `patch -F0` (no
   fuzz: a mod that no longer fits fails the build). 01-11 are Anarch's own mods rebased to stack;
   12 (quicksave store) and 13 (parallel columns) are ours. A new or changed mod is made against
@@ -84,10 +87,18 @@ check placement with `xtensa-esp32s3-elf-nm -C build/anarch-bit.elf` (IRAM is 0x
 ## Flash layout and persistence
 
 `partitions.csv` keeps IDF's single-app-large offsets so NVS saves survive updates. Saves
-(unlocked levels, settings) live in NVS (`SFG_save`/`SFG_load`). The quicksave goes to the
-`quicksave` partition (data 0x40, 64 KB) as `[firmware ELF SHA-256][SFG_Game][SFG_Player]
-[SFG_CurrentLevel]`, hash written last: the snapshot holds pointers into this build's flash, so
-any other build ignores it.
+(unlocked levels, settings) live in NVS (`SFG_save`/`SFG_load`). The `quicksave` partition
+(data 0x40, 64 KB) holds two snapshots, each `[firmware ELF SHA-256][SFG_Game][SFG_Player]
+[SFG_CurrentLevel]` (~19 KB), hash written last: the player's quicksave at 0 and the game to
+resume at `ResumeAt` (0x8000). A snapshot holds pointers into this build's flash, so any other
+build ignores it.
+
+Resume (as in CGB-Bit): `shutdown()` (auto-sleep, low battery) stores the game once the main
+loop runs and a level is played or paused in its menu. At boot, after `SFG_game.frameTime` is
+set, `resume()` reads the snapshot, erases its hash sector (so it resumes once; the power switch
+skips `shutdown()`), and passes it through the quicksave variables to mod 12's `SFG_quickLoad`,
+which rebases the level clock and keeps unlocked levels and settings; the player's quicksave is
+then read back from flash.
 
 ## Performance
 
