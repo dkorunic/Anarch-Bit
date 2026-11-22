@@ -73,9 +73,13 @@ Sound: core 0 alone runs the mixer (`audioFill()` after each loop pass and durin
 and backlight fades), keeping `PcmLead` (50 ms) of 8 kHz samples ahead in `mixer.ring`;
 `pcmTick`, a GPTimer interrupt started from `columnTask` so it runs on core 1, writes each sample
 to the buzzer's LEDC duty registers via `ledc_ll_*` (8-bit PWM at 156.25 kHz). Anarch's sound
-effects and bytebeat music are mixed as its SDL front end does; the stock-firmware chirps are
-square waves (`Chirps`). `SFG_GET_SFX_SAMPLE` doesn't parenthesise its arguments: pass plain
-variables.
+effects are mixed as its SDL front end does; the bytebeat music goes through `bassCut` (two
+one-pole high-passes at 400 Hz: 70-99% of its energy is bass the buzzer can't play) and a per-track
+`MusicGain`, calibrated on the clipped 8-bit output itself to ~22 RMS per track (the cut music is
+spiky: gains computed from the unclipped signal come out far too low); the smoke test checks
+18-26 over each track's first 30 s. `app_main` holds music off until the boot jingle ends. The
+stock-firmware chirps are square waves (`Chirps`). `SFG_GET_SFX_SAMPLE` doesn't parenthesise its
+arguments: pass plain variables.
 
 Hot code: `main.cpp` is built with `-Os`, and the per-column/per-pixel functions listed in
 `ANARCH_IRAM` (`main/CMakeLists.txt`) are moved to internal RAM by `tools/iram_hot.sh` (renames

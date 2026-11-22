@@ -21,6 +21,14 @@ constexpr Chirp Chirps[][MaxChirps] = {
 	  { 0, 0, 50 }, { 784, 392, 100 }, { 0, 0, 50 }, { 294, 440, 100 }, { 587, 587, 100 } },
 };
 
+// Music gain per track, in 1/64ths, after the bass cut (Mixer::bassCut): each bytebeat track at
+// ~22 RMS of the 128 the output swings, level with what the buzzer plays of a full-volume effect
+// (~21 RMS above 250 Hz). Measured on the 8-bit output itself over each track's first 30 s, clipping
+// included: the cut leaves sharp edges, 0.5-1.7% of samples clip. The SDL front end's flat x16
+// without the cut was barely audible on the buzzer: 70-99% of the music's energy is below 250 Hz.
+constexpr int16_t MusicGain[] = { 380, 996, 395, 485, 921, 270 };
+static_assert(sizeof(MusicGain) / sizeof(*MusicGain) == SFG_TRACK_COUNT, "one gain per music track");
+
 struct Mixer {
 	static constexpr uint32_t Rate = 8000, RingSize = 1024; // the ring holds 128 ms
 	uint8_t ring[RingSize] = {}; // sample n is ring[n % RingSize]
@@ -47,7 +55,11 @@ struct Mixer {
 		for(; int32_t(upTo - written) > 0; written++){
 			int32_t mix = sfx[written % SFG_SFX_SAMPLE_COUNT];
 			sfx[written % SFG_SFX_SAMPLE_COUNT] = 0;
-			if(music) mix += 16 * (SFG_getNextMusicSample() - SFG_musicTrackAverages[SFG_MusicState.track]); // SDL_MUSIC_VOLUME
+			if(music){
+				const int32_t sample = SFG_getNextMusicSample(); // may move on to the next track
+				const uint8_t track = SFG_MusicState.track;
+				mix += int32_t(MusicGain[track] * bassCut(sample - SFG_musicTrackAverages[track]));
+			}
 			mix += chirpSample();
 			// The buzzer idles at duty 0 (no current, no hiss) and centres on 50% while anything
 			// plays: the bias ramps between them over 16 ms, so starting and stopping doesn't click.
@@ -64,6 +76,18 @@ private:
 	int seg = 0;
 	uint32_t segSample = 0, phase = 0;
 	int32_t amp = 0, bias = 0;
+	float hpIn = 0, hp1 = 0, hp2 = 0;
+
+	// Two one-pole high-passes at 400 Hz (12 dB per octave below it): the bass a buzzer can't play
+	// would only take up the output's range, so the music keeps the rest, made louder by MusicGain.
+	float bassCut(float x){
+		constexpr float A = 1 / (1 + 2 * 3.14159265f * 400 / Rate);
+		const float y1 = A * (hp1 + x - hpIn);
+		hpIn = x;
+		hp2 = A * (hp2 + y1 - hp1);
+		hp1 = y1;
+		return hp2;
+	}
 
 	int32_t chirpSample(){
 		if(!chirpAt) return 0;

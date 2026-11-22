@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <cmath>
 #include "anarch_settings.h"
 
 static int stores;
@@ -78,6 +79,23 @@ static void testMixer(){
 	const uint32_t t = SFG_MusicState.t;
 	m.fill(m.written + 100);
 	CHECK(SFG_MusicState.t == t + 100);
+	// Every track about equally loud (bass cut, then MusicGain), ~22 RMS around the centre over its
+	// first 30 s, as MusicGain was measured (shorter stretches vary: the tracks get louder and softer).
+	for(uint8_t track = 0; track < SFG_TRACK_COUNT; track++){
+		SFG_MusicState = {};
+		SFG_MusicState.track = track;
+		m.fill(m.written + Mixer::Rate); // the bias settles at the centre
+		double sq = 0;
+		for(int i = 0; i < 30 * int(Mixer::Rate); i += 512){
+			m.fill(m.written + 512);
+			for(uint32_t n = m.written - 512; n != m.written; n++){
+				const int v = m.ring[n % Mixer::RingSize] - 128;
+				sq += v * v;
+			}
+		}
+		const double rms = std::sqrt(sq / (30 * Mixer::Rate));
+		CHECK(rms > 18 && rms < 26);
+	}
 	m.music = false;
 }
 

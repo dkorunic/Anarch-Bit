@@ -105,8 +105,10 @@ pointers into the firmware), so reflashing a different build discards it.
 Anarch's own sound effects and its bytebeat music (on/off in Anarch's settings menu, as is
 sound) play as 8 kHz PCM on the buzzer: `main/audio.h` mixes them as Anarch's SDL front end
 does, and a timer interrupt on the second core sets each sample as the buzzer's PWM duty
-(8-bit, 156 kHz, far above hearing). While nothing plays the buzzer idles at duty 0. An
-experiment: earlier versions played each effect as a frequency sweep instead.
+(8-bit, 156 kHz, far above hearing). While nothing plays the buzzer idles at duty 0. The
+music is cut below 400 Hz first (most of the tracks' energy is bass a buzzer can't play) and
+each track is brought to about the loudness of the effects (`MusicGain`). Earlier versions
+played each effect as a frequency sweep instead.
 
 ## Taken from the stock firmware
 
