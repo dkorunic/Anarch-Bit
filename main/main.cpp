@@ -12,6 +12,7 @@
 #include <hal/ledc_ll.h>
 #include <esp_attr.h>
 #include <esp_timer.h>
+#include <esp_rom_sys.h>
 #include <esp_efuse.h>
 #include <nvs_flash.h>
 #include <esp_sleep.h>
@@ -152,7 +153,7 @@ static void initBacklight(){
 	ledc_timer_config_t t = {};
 	t.speed_mode = LEDC_LOW_SPEED_MODE;
 	t.duty_resolution = LEDC_TIMER_10_BIT;
-	t.timer_num = LEDC_TIMER_1; // own timer: the buzzer keeps changing LEDC_TIMER_0's frequency
+	t.timer_num = LEDC_TIMER_1; // own timer: the buzzer's LEDC_TIMER_0 runs at 156.25 kHz, 8-bit
 	t.freq_hz = 5000;
 	t.clk_cfg = LEDC_USE_XTAL_CLK; // S3: one clock source for all LEDC timers, see initBuzzer
 	ESP_ERROR_CHECK(ledc_timer_config(&t));
@@ -310,6 +311,7 @@ static void audioFill(){
 static void audioOff(){
 	if(!pcmTimer) return; // not started yet (an empty battery at boot): the buzzer was never driven
 	gptimer_stop(pcmTimer);
+	esp_rom_delay_us(2 * 1000000 / Mixer::Rate); // an interrupt already running on core 1 writes its sample first
 	buzzerDuty(0);
 }
 
@@ -355,7 +357,6 @@ void renderColumns(RCL_Camera cam, RCL_ArrayFunction arrayFunc, RCL_ArrayFunctio
 static void initBuzzer(){
 	ledc_timer_config_t t = {};
 	t.speed_mode = LEDC_LOW_SPEED_MODE;
-	t.duty_resolution = LEDC_TIMER_10_BIT;
 	t.timer_num = LEDC_TIMER_0;
 	t.duty_resolution = LEDC_TIMER_8_BIT; // the PCM samples' 8 bits, 40 MHz / 256 = 156.25 kHz
 	t.freq_hz = 156250;
@@ -537,12 +538,15 @@ extern "C" void app_main(){
 	const uint32_t splashTime = SFG_getTimeMs();
 	SFG_init();
 	quickSaveLoad();
+	const bool music = mixer.music; // SFG_init turned it on per Anarch's setting: start it after the jingle
+	mixer.music = false;
 	if(SFG_game.settings & 0x01) mixer.chirp(ChirpBoot, 255);
 	while(SFG_getTimeMs() - splashTime < 2000){
 		audioFill();
 		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 	backlightFade(0);
+	mixer.music = music;
 
 	SFG_game.frameTime = SFG_getTimeMs(); // SFG_init set 0: don't catch up on the splash time in the first frame
 	resume(); // after frameTime: the level clock is rebased to it
