@@ -22,7 +22,7 @@ a scripted run (`tools/demo.cpp`).
 
 Mods 01-11 are from Anarch's `mods/` (the author's "consoomer edition" set, minus `crt`
 and `terminal_messages`), rebased onto the submodule's commit so they stack exactly; the
-original upstream diffs conflict with each other. 12 is ours.
+original upstream diffs conflict with each other. 12 and 13 are ours.
 
 | Mod | Does |
 |---|---|
@@ -38,6 +38,7 @@ original upstream diffs conflict with each other. 12 is ours.
 | 10 hd | 64x64 textures instead of 32x32 |
 | 11 movement_inertia | smoother acceleration / stopping |
 | 12 quicksave_store | quicksaves survive power-off (see below); quickload keeps current unlocked levels and settings |
+| 13 parallel_columns | lets the ray casting's columns run on both cores (see Performance) |
 
 A new or updated mod must apply on top of the previous ones: make it against the output of
 `tools/patch_anarch.sh <dir>`, number it after the others, and run `tools/smoke_test.sh`.
@@ -117,9 +118,19 @@ pointers into the firmware), so reflashing a different build discards it.
 Renders at full 128x128 (`SFG_RAYCASTING_SUBSAMPLE 1`), 45 FPS, frames sent to the panel by
 DMA while the next one renders; flash runs in QIO mode with enlarged caches (the HD textures
 are read from flash every frame). With all mods, 60 FPS measured 93-131% CPU load in play on
-a Bit 3, hence 45. `idf.py monitor` prints `CPU load: N%` every 16 frames (share of the
-frame time budget). If it stays above 100%, set `SFG_RAYCASTING_SUBSAMPLE 2` and/or a lower
-`SFG_FPS` in `main/anarch_settings.h`.
+a Bit 3 when everything ran on one core, hence 45.
+
+Ideas from [CGB-Bit](https://github.com/dkorunic/CGB-Bit), not yet measured on the device:
+
+- Both cores render: the ray casting's columns alternate between them (mod 13 and
+  `renderColumns` in `main/main.cpp`). Each column only reads the level and writes its own
+  pixels, so the picture is exactly the one-core picture (the smoke test checks it).
+  Sprites, the HUD and the game logic stay on the first core.
+
+`idf.py monitor` prints `CPU load: N% (columns on core 1: M%), F FPS` every second: the first
+core's busy share (game, its columns, sending frames), the second core's columns, and the
+frames drawn. If the load stays above ~100% the game can't keep `SFG_FPS`; set
+`SFG_RAYCASTING_SUBSAMPLE 2` and/or a lower `SFG_FPS` in `main/anarch_settings.h`.
 
 ## Auto-sleep
 
@@ -143,8 +154,9 @@ ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
 - `tools/patch_anarch.sh <dir>`: writes the patched Anarch tree the firmware is built from
   (the build runs it too).
 - `tools/smoke_test.sh`: plays all 10 levels of the patched game with random input under
-  ASan/UBSan (deaths, a forced win per level, level transitions) and checks the quicksave
-  behaviour of mod 12; about a minute.
+  ASan/UBSan (deaths, a forced win per level, level transitions), rendering on two threads
+  as the firmware's two cores do, and checks the quicksave behaviour of mod 12 and that frames
+  drawn on two threads match one-thread frames exactly; about a minute.
 - `tools/make_demo.sh`: regenerates `demo.gif`. The run is scripted in frames, so changes
   that affect movement or aiming may need `tools/demo.cpp` retuned.
 - `web/build.sh <dir> <anarch-bit-merged.bin> <version>`: assembles the browser installer

@@ -1,0 +1,96 @@
+anarch-bit: lets the front end cast the ray columns on several threads (RCL_CAST_RAYS_PARALLEL):
+RCL_castRaysMultiHitColumns casts every step-th column from first on, each column's ray direction
+computed from its index (the same values as the original running sum).
+
+--- 12/raycastlib.h	2026-11-22 09:03:00.895583455 +0000
++++ 13/raycastlib.h	2026-11-22 09:03:00.895583455 +0000
+@@ -441,6 +441,25 @@
+   RCL_RayConstraints constraints);
+ 
+ /**
++  Like RCL_castRaysMultiHit, but only casts the columns first, first + step,
++  first + 2 * step... (anarch-bit: two cores each render every other column).
++*/
++void RCL_castRaysMultiHitColumns(RCL_Camera cam, RCL_ArrayFunction arrayFunc,
++  RCL_ArrayFunction typeFunction, RCL_ColumnFunction columnFunc,
++  RCL_RayConstraints constraints, int16_t first, int16_t step);
++
++#ifdef RCL_CAST_RAYS_PARALLEL
++/**
++  Defined by the front end: casts all columns (RCL_castRaysMultiHitColumns),
++  split between threads, and returns once all are done. RCL_renderComplex uses
++  it instead of RCL_castRaysMultiHit.
++*/
++void RCL_CAST_RAYS_PARALLEL(RCL_Camera cam, RCL_ArrayFunction arrayFunc,
++  RCL_ArrayFunction typeFunction, RCL_ColumnFunction columnFunc,
++  RCL_RayConstraints constraints);
++#endif
++
++/**
+   Renders given camera view, with help of provided functions. This function is
+   simpler and faster than RCL_renderComplex(...) and is meant to be rendering
+   flat levels.
+@@ -956,6 +975,14 @@
+   RCL_ArrayFunction typeFunction, RCL_ColumnFunction columnFunc,
+   RCL_RayConstraints constraints)
+ {
++  RCL_castRaysMultiHitColumns(cam,arrayFunc,typeFunction,columnFunc,
++    constraints,0,1);
++}
++
++void RCL_castRaysMultiHitColumns(RCL_Camera cam, RCL_ArrayFunction arrayFunc,
++  RCL_ArrayFunction typeFunction, RCL_ColumnFunction columnFunc,
++  RCL_RayConstraints constraints, int16_t first, int16_t step)
++{
+   RCL_Vector2D dir1 =
+     RCL_angleToDirection(cam.direction - RCL_HORIZONTAL_FOV_HALF);
+ 
+@@ -982,24 +1009,19 @@
+   RCL_Ray r;
+   r.start = cam.position;
+ 
+-  RCL_Unit currentDX = 0;
+-  RCL_Unit currentDY = 0;
+-
+-  for (int16_t i = 0; i < cam.resolution.x; ++i)
++  for (int16_t i = first; i < cam.resolution.x; i += step)
+   {
+     /* Here by linearly interpolating the direction vector its length changes,
+     which in result achieves correcting the fish eye effect (computing
+-    perpendicular distance). */
++    perpendicular distance). dX * i is the running sum dX + dX + ... the
++    original loop kept, computed directly so any column can come first. */
+ 
+-    r.direction.x = dir1.x + currentDX / cam.resolution.x;
+-    r.direction.y = dir1.y + currentDY / cam.resolution.x;
++    r.direction.x = dir1.x + (dX * i) / cam.resolution.x;
++    r.direction.y = dir1.y + (dY * i) / cam.resolution.x;
+ 
+     RCL_castRayMultiHit(r,arrayFunc,typeFunction,hits,&hitCount,constraints);
+ 
+     columnFunc(hits,hitCount,i,r);
+-
+-    currentDX += dX;
+-    currentDY += dY;
+   }
+ }
+ 
+@@ -1595,8 +1617,18 @@
+   _RCL_floorPixelDistances = floorPixelDistances; // pass to column function
+ #endif
+ 
++#ifdef RCL_CAST_RAYS_PARALLEL
++  /* The FOV correction factors are computed on first use; do it now, before
++     the columns run in parallel, so no two threads ever write them. */
++  RCL_perspectiveScaleVertical(1,1);
++  RCL_perspectiveScaleHorizontal(1,1);
++
++  RCL_CAST_RAYS_PARALLEL(cam,_RCL_floorCeilFunction,typeFunction,
++    _RCL_columnFunctionComplex,constraints);
++#else
+   RCL_castRaysMultiHit(cam,_RCL_floorCeilFunction,typeFunction,
+     _RCL_columnFunctionComplex,constraints);
++#endif
+ }
+ 
+ void RCL_renderSimple(RCL_Camera cam, RCL_ArrayFunction floorHeightFunc,

@@ -1,22 +1,39 @@
 // Plays every level of the patched game with random input under ASan/UBSan, with the Bit's
 // settings, letting deaths, wins and level transitions run their course, and checks the quicksave
-// behaviour of mods/12-quicksave_store.diff. Run by smoke_test.sh.
+// behaviour of mods/12-quicksave_store.diff and that rendering the columns on two threads (mod 13,
+// as the firmware's two cores do) gives exactly the one-thread picture. Run by smoke_test.sh.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include "anarch_settings.h"
 
 static int stores;
 static void store(){ stores++; }
 #define SFG_QUICKSAVE_STORE store
+#define RCL_CAST_RAYS_PARALLEL castColumns
 #include "game.h"
+
+// As main.cpp's renderColumns: odd columns on another thread (core 1), even ones on this one.
+static bool parallel = true;
+void castColumns(RCL_Camera cam, RCL_ArrayFunction arrayFunc, RCL_ArrayFunction typeFunc, RCL_ColumnFunction columnFunc,
+	RCL_RayConstraints constraints){
+	if(!parallel) return RCL_castRaysMultiHit(cam, arrayFunc, typeFunc, columnFunc, constraints);
+	std::thread odd(RCL_castRaysMultiHitColumns, cam, arrayFunc, typeFunc, columnFunc, constraints, 1, 2);
+	RCL_castRaysMultiHitColumns(cam, arrayFunc, typeFunc, columnFunc, constraints, 0, 2);
+	odd.join();
+}
 
 #define CHECK(cond) do { if(!(cond)){ fprintf(stderr, "FAILED %s:%d: %s\n", __FILE__, __LINE__, #cond); exit(1); } } while(0)
 
 static uint32_t now;
 static uint8_t keys[7];
 
-void SFG_setPixel(uint16_t x, uint16_t y, uint8_t){ CHECK(x < SFG_SCREEN_RESOLUTION_X && y < SFG_SCREEN_RESOLUTION_Y); }
+static uint8_t screen[SFG_SCREEN_RESOLUTION_Y][SFG_SCREEN_RESOLUTION_X];
+void SFG_setPixel(uint16_t x, uint16_t y, uint8_t c){
+	CHECK(x < SFG_SCREEN_RESOLUTION_X && y < SFG_SCREEN_RESOLUTION_Y);
+	screen[y][x] = c;
+}
 uint32_t SFG_getTimeMs(){ return now; }
 void SFG_sleepMs(uint16_t){}
 int8_t SFG_keyPressed(uint8_t k){ return k < 7 ? keys[k] : 0; }
@@ -27,8 +44,20 @@ void SFG_playSound(uint8_t, uint8_t){}
 void SFG_save(uint8_t*){}
 uint8_t SFG_load(uint8_t*){ return 1; }
 
+// Draws the current frame on one thread and on two and checks the pictures are the same.
+static bool sameOnTwoThreads(){
+	static uint8_t one[sizeof(screen)];
+	parallel = false;
+	SFG_draw();
+	memcpy(one, screen, sizeof(one));
+	parallel = true;
+	SFG_draw();
+	return memcmp(one, screen, sizeof(one)) == 0;
+}
+
 int main(){
 	srand(1);
+	int threadChecks = 0;
 	SFG_init();
 	int statesSeen = 0;
 	for(uint8_t level = 0; level < SFG_NUMBER_OF_LEVELS; level++){
@@ -63,6 +92,10 @@ int main(){
 			if(f == 5000) SFG_winLevel(); // random play never finishes a level: run the win, save and next-level path
 			now += 1000 / SFG_FPS + (f % 3 != 0);
 			SFG_mainLoopBody();
+			if(f % 25 == 0 && SFG_game.state == SFG_GAME_STATE_PLAYING){
+				CHECK(sameOnTwoThreads());
+				threadChecks++;
+			}
 			statesSeen |= 1 << SFG_game.state;
 			if(SFG_game.state != before){
 				deaths += SFG_game.state == SFG_GAME_STATE_LOSE;
@@ -84,5 +117,7 @@ int main(){
 	printf("\n");
 	CHECK(statesSeen >> SFG_GAME_STATE_LOSE & 1 && statesSeen >> SFG_GAME_STATE_WIN & 1); // both paths ran
 	CHECK(stores == SFG_NUMBER_OF_LEVELS); // every quicksave reached the front end's storage hook
+	CHECK(threadChecks > 1000);
+	printf("%d frames drawn identically on one and two threads\n", threadChecks);
 	printf("smoke test passed\n");
 }

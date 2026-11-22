@@ -8,5 +8,5 @@ trap 'rm -rf "$TMP"' EXIT
 sh tools/patch_anarch.sh "$TMP/anarch"
 # -fwrapv as in the firmware: raycastlib relies on signed overflow wrapping.
 c++ -std=c++20 -O1 -g -w -fwrapv -fsanitize=address,undefined -fno-sanitize=signed-integer-overflow \
-	-fno-sanitize-recover=all -Imain -I"$TMP/anarch" tools/smoke_test.cpp -o "$TMP/smoke"
+	-fno-sanitize-recover=all -pthread -Imain -I"$TMP/anarch" tools/smoke_test.cpp -o "$TMP/smoke"
 "$TMP/smoke"

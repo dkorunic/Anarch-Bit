@@ -5,6 +5,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 #include <driver/gpio.h>
 #include <driver/ledc.h>
 #include <esp_timer.h>
@@ -22,12 +23,11 @@
 
 #include "anarch_settings.h"
 
-// Shown by `idf.py monitor`: CPU load is per 16 frames, in % of the frame time budget.
-#define SFG_CPU_LOAD(percent) { printf("CPU load: %d%%\n", (int) (percent)); }
 #define SFG_LOG(str) { printf("Anarch: %s\n", str); }
 
 static void quickSaveStore();
 #define SFG_QUICKSAVE_STORE quickSaveStore // mods/12-quicksave_store.diff: keep quicksaves across power-off
+#define RCL_CAST_RAYS_PARALLEL renderColumns // mods/13-parallel_columns.diff: the columns on both cores
 
 #include "game.h"
 
@@ -70,6 +70,13 @@ static constexpr Chirp sounds[][MaxChirps] = {
 };
 static std::atomic<int> sfxRequest{ -1 }; // (index << 8) | volume, posted by playSound, taken by sfxStep
 static esp_timer_handle_t sfxTimer;
+
+// The ray casting's odd columns on core 1 (mods/13-parallel_columns.diff), while core 0 does the
+// even ones; see renderColumns.
+struct ColumnJob { RCL_Camera cam; RCL_ArrayFunction arrayFunc, typeFunc; RCL_ColumnFunction columnFunc; RCL_RayConstraints constraints; };
+static ColumnJob columnJob;
+static SemaphoreHandle_t columnsGo, columnsDone;
+static std::atomic<uint32_t> core1BusyUs;
 
 static constexpr uint32_t SleepMs = 2 * 60 * 1000; // Bit-Firmware default auto-sleep: 2 min without input
 static constexpr uint32_t DimMs = SleepMs - 10 * 1000; // dim the screen 10 s before, as a warning
@@ -328,6 +335,29 @@ static void playSound(int index, uint8_t volume){
 	esp_timer_start_once(sfxTimer, 0); // fails if a sound is running; its next step picks the request up
 }
 
+// Pinned to core 1: casts the odd columns of each frame renderColumns hands over.
+static void columnTask(void*){
+	while(true){
+		xSemaphoreTake(columnsGo, portMAX_DELAY);
+		const int64_t start = esp_timer_get_time();
+		const ColumnJob& j = columnJob;
+		RCL_castRaysMultiHitColumns(j.cam, j.arrayFunc, j.typeFunc, j.columnFunc, j.constraints, 1, 2);
+		core1BusyUs += esp_timer_get_time() - start;
+		xSemaphoreGive(columnsDone);
+	}
+}
+
+// RCL_renderComplex's column loop, split: each column only reads the level and writes its own
+// pixels and depth-buffer entries, so the two halves never touch the same data (the smoke test
+// checks the picture is exactly the one-core picture). Sprites and the HUD follow on core 0.
+void renderColumns(RCL_Camera cam, RCL_ArrayFunction arrayFunc, RCL_ArrayFunction typeFunc, RCL_ColumnFunction columnFunc,
+	RCL_RayConstraints constraints){
+	columnJob = { cam, arrayFunc, typeFunc, columnFunc, constraints };
+	xSemaphoreGive(columnsGo);
+	RCL_castRaysMultiHitColumns(cam, arrayFunc, typeFunc, columnFunc, constraints, 0, 2);
+	xSemaphoreTake(columnsDone, portMAX_DELAY);
+}
+
 static void initBuzzer(){
 	ledc_timer_config_t t = {};
 	t.speed_mode = LEDC_LOW_SPEED_MODE;
@@ -484,6 +514,12 @@ extern "C" void app_main(){
 	initBacklight(); // dark while the panel initializes
 	initDisplay(rev);
 	initBuzzer();
+	columnsGo = xSemaphoreCreateBinary();
+	columnsDone = xSemaphoreCreateBinary();
+	if(!columnsGo || !columnsDone || xTaskCreatePinnedToCore(columnTask, "columns", 8192, nullptr, 5, nullptr, 1) != pdPASS){
+		printf("Not enough RAM to start core 1\n");
+		shutdown();
+	}
 
 	// Stock boot: splash, fade in, jingle, splash stays at least 2 s, fade out, then the UI fades in.
 	lcd.drawBmp(splashStart, splashEnd - splashStart, 36, 11);
@@ -498,9 +534,17 @@ extern "C" void app_main(){
 	SFG_game.frameTime = SFG_getTimeMs(); // SFG_init set 0: don't catch up on the splash time in the first frame
 	lcd.startWrite(); // keep the bus so pushImageDMA returns while the transfer runs
 	bool lit = false, dimmed = false;
-	uint32_t tickTime = SFG_getTimeMs(), activityTime = tickTime;
+	uint32_t tickTime = SFG_getTimeMs(), activityTime = tickTime, statTime = tickTime, busyUs = 0, framesDrawn = 0;
 	while(true){
 		const uint32_t now = SFG_getTimeMs();
+		// Shown by `idf.py monitor` every second: core 0's busy share (game, its columns, sending
+		// frames; over ~100% and the game can't keep SFG_FPS), core 1's columns, frames drawn.
+		if(now - statTime >= 1000){
+			printf("CPU load: %d%% (columns on core 1: %d%%), %d FPS\n", (int) (busyUs / (now - statTime) / 10),
+				(int) (core1BusyUs.exchange(0) / (now - statTime) / 10), (int) framesDrawn);
+			statTime = now;
+			busyUs = framesDrawn = 0;
+		}
 		if(now - tickTime >= 100){
 			tickTime = now;
 
@@ -529,6 +573,7 @@ extern "C" void app_main(){
 
 		slept = false;
 		const bool init = SFG_game.state == SFG_GAME_STATE_INIT; // waits for A/B release, draws nothing
+		const int64_t start = esp_timer_get_time();
 		SFG_mainLoopBody();
 		if(init) vTaskDelay(1);
 		else if(!slept){
@@ -536,6 +581,8 @@ extern "C" void app_main(){
 			drawLowBattery(now);
 			lcd.pushImageDMA(0, 0, SFG_SCREEN_RESOLUTION_X, SFG_SCREEN_RESOLUTION_Y, (const lgfx::swap565_t*) frame);
 			frame = frame == frames[0] ? frames[1] : frames[0];
+			busyUs += esp_timer_get_time() - start;
+			framesDrawn++;
 			if(!lit){
 				lit = true;
 				backlightFade(blFull);
