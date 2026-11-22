@@ -24,7 +24,7 @@ PC tools (no ESP-IDF; run from a plain shell, the ESP-IDF shell's Python lacks P
 ```shell
 tools/smoke_test.sh                  # the only test: all of it, ~1 min under ASan/UBSan (also in CI)
 tools/patch_anarch.sh <dir>          # the patched Anarch tree the firmware is built from
-tools/make_demo.sh                   # regenerates demo.gif (Python + Pillow)
+tools/make_demo.sh                   # regenerates demo.gif (Python + Pillow, gifsicle)
 web/build.sh <out dir> build/anarch-bit-merged.bin <version>   # browser installer site
 ```
 
@@ -111,8 +111,15 @@ textures are read from flash every frame). Fallbacks if load stays over 100%:
 
 ## Conventions
 
-- `tools/demo.cpp` plays a frame-scripted run of level 1 (one-thread rendering); changes that
-  affect movement or aiming may need its script retuned before regenerating `demo.gif`.
+- `tools/demo.cpp` (one-thread rendering) plays level 1: a script in 1/60 s steps up to the
+  barrels, then `autopilot()` (the `Auto` step), as in CGB-Bit: it follows the `route`
+  waypoints (planned from a dump of the level's floor heights: straight lines between them must
+  clear walls and raised blocks) and fights monsters within 5 squares in a clear line. The run
+  is checked to its end (27 s: kills the ramp warrior, goes through the door at 46,37); a
+  change to movement, aiming, combat or the level needs it checked again with contact sheets of
+  the raw frames before regenerating `demo.gif`. `make_demo.sh` then runs `gifsicle -O3`
+  (lossless here, one palette; `--lossy` gains under 3% on the dithered textures). demo.gif is
+  ~4 MB at 20 FPS: chosen over 10 FPS (2.2 MB) for smoothness.
 - Browser installer (`web/`, ESP Web Tools 10.4.0 served from the site, hash-pinned in
   `web/build.sh`): `"new_install_prompt_erase": true` in `web/manifest.json` is essential (no
   Improv Serial: without it every install erases the whole chip). `web/build.sh` cuts the merged

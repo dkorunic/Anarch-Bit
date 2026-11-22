@@ -2,14 +2,18 @@
 // for make_demo_gif.py. Built and run by make_demo.sh; see README.
 #include <cstdio>
 #include <cstdint>
+#include <cmath>
 #include "anarch_settings.h"
 #include "game.h"
 
-// Bits: 0 up, 1 right, 2 down, 3 left, 4 A, 5 B, 6 C (= Bit's Menu button), as SFG_KEY_*.
-enum : uint8_t { U = 1, R = 2, D = 4, L = 8, A = 16, B = 32, C = 64 };
+// Bits: 0 up, 1 right, 2 down, 3 left, 4 A, 5 B, 6 C (= Bit's Menu button), as SFG_KEY_*; Auto: the
+// keys autopilot() picks.
+enum : uint8_t { U = 1, R = 2, D = 4, L = 8, A = 16, B = 32, C = 64, Auto = 128 };
 struct Step { int frames; uint8_t keys; };
-// Level 1: grab the shotgun west of the start, come back, shoot the two barrels up north.
-// Tuned by watching the result; change a mod or setting that affects movement and it may need retuning.
+// Level 1: grab the shotgun west of the start, come back, shoot the two barrels up north; then the
+// autopilot walks north and up the ramp, kills the warrior there and goes through the door beyond.
+// Tuned by watching the result (contact sheets of the frames); change a mod or setting that affects
+// movement or combat and it may need retuning. Deterministic; the run is checked to its end.
 static const Step script[] = { // durations in 1/60 s, whatever SFG_FPS is
 	{ 90, 0 }, { 6, A },  // main menu, play
 	{ 90, 0 }, { 6, A },  // intro text, skip
@@ -20,7 +24,62 @@ static const Step script[] = { // durations in 1/60 s, whatever SFG_FPS is
 	{ 29, R }, { 30, U }, // north, between the lamps
 	{ 20, 0 }, { 80, A }, // two shots: the barrels explode
 	{ 90, 0 },
+	{ 885, Auto },        // 14.75 s: ends in the corridor past the door, before a far monster comes in range
 };
+
+// Squares (x, y) the autopilot walks through, in order (level 1's map: tools need a dump of
+// SFG_floorHeightAt to plan): north from the barrels, east and up the ramp along row 41, the door
+// at 46,37 (it opens as the player comes close), the corridor beyond. Straight lines between them
+// stay clear of the walls and the raised blocks.
+struct Point { float x, y; };
+static constexpr Point route[] = { { 52.5f, 46.5f }, { 52.5f, 44.5f }, { 58.5f, 44.5f }, { 58.5f, 41.5f },
+	{ 50.5f, 41.5f }, { 46.5f, 38.5f }, { 46.5f, 35.5f }, { 46.5f, 30.5f } };
+static size_t waypoint;
+
+// Nothing between the two points higher than half a square above the player's floor (a wall, a
+// raised block, a closed door), sampled every 1/8 square.
+static bool clearLine(float x0, float y0, float x1, float y1){
+	const RCL_Unit floor = SFG_floorHeightAt(x0, y0);
+	const int n = std::hypot(x1 - x0, y1 - y0) * 8;
+	for(int i = 1; i < n; i++){
+		const float x = x0 + (x1 - x0) * i / n, y = y0 + (y1 - y0) * i / n;
+		const RCL_Unit f = SFG_floorHeightAt(x, y), c = SFG_ceilingHeightAt(x, y);
+		if(f - floor > RCL_UNITS_PER_SQUARE / 2 || c - f < RCL_UNITS_PER_SQUARE / 2) return false;
+	}
+	return true;
+}
+
+// How far to turn to face (dx, dy), in Anarch's angle units (1024 per turn, -512..511; Right adds).
+// Its direction vector for angle a is (cos a, -sin a).
+static int turnTo(float dx, float dy){
+	const int want = std::lround(std::atan2(-dy, dx) * 1024 / (2 * M_PI));
+	return ((want - (int) SFG_player.camera.direction) % 1024 + 1536) % 1024 - 512;
+}
+
+// A monster that isn't dead or dying within 5 squares in a clear line: turn to it, fire once
+// facing it. Otherwise follow the route, walking while roughly facing the next point.
+static uint8_t autopilot(){
+	const float px = SFG_player.camera.position.x / float(RCL_UNITS_PER_SQUARE), py = SFG_player.camera.position.y / float(RCL_UNITS_PER_SQUARE);
+	const SFG_MonsterRecord* target = nullptr;
+	float nearest = 5;
+	for(int i = 0; i < SFG_currentLevel.monsterRecordCount; i++){
+		const SFG_MonsterRecord& m = SFG_currentLevel.monsterRecords[i];
+		const float mx = m.coords[0] / 4.0f, my = m.coords[1] / 4.0f, d = std::hypot(mx - px, my - py); // coords: 1/4 squares
+		if(SFG_MR_STATE(m) != SFG_MONSTER_STATE_DEAD && SFG_MR_STATE(m) != SFG_MONSTER_STATE_DYING && d < nearest && clearLine(px, py, mx, my)){
+			target = &m;
+			nearest = d;
+		}
+	}
+	if(target){
+		const int turn = turnTo(target->coords[0] / 4.0f - px, target->coords[1] / 4.0f - py);
+		return turn > 8 ? R : turn < -8 ? L : A;
+	}
+	constexpr size_t points = sizeof(route) / sizeof(*route);
+	while(waypoint < points && std::hypot(route[waypoint].x - px, route[waypoint].y - py) < 0.4f) waypoint++;
+	if(waypoint == points) return 0;
+	const int turn = turnTo(route[waypoint].x - px, route[waypoint].y - py);
+	return (turn > 11 ? R : turn < -11 ? L : 0) | (std::abs(turn) < 96 ? U : 0); // 11: a frame's turn
+}
 
 static uint8_t screen[SFG_SCREEN_RESOLUTION_X * SFG_SCREEN_RESOLUTION_Y];
 static uint32_t now;
@@ -59,7 +118,7 @@ int main(int argc, char** argv){
 	for(const Step& s : script){
 		scriptTime += s.frames * 1000 / 60;
 		for(; now < scriptTime; frame++){
-			keys = s.keys;
+			keys = s.keys == Auto ? autopilot() : s.keys;
 			now = (frame + 1) * 1000 / SFG_FPS; // exact game time, no drift
 			const bool init = SFG_game.state == SFG_GAME_STATE_INIT; // this call draws nothing
 			SFG_mainLoopBody();

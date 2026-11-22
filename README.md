@@ -8,11 +8,11 @@ Standalone ESP-IDF firmware that runs only Anarch on a CircuitMess Bit
 **[Install from your browser](https://dkorunic.github.io/Anarch-Bit/)**: desktop Chrome, Edge
 or Opera, a USB-C cable, one click. Nothing to install.
 
-![Anarch on the Bit: menu, level 1, shotgun pickup, exploding barrels](demo.gif)
+![Anarch on the Bit: menu, level 1, shotgun pickup, exploding barrels, a fight on the ramp, through a door](demo.gif)
 
 What the Bit's 128x128 screen shows, at 2x size and 20 FPS: rendered on the PC by
 `tools/make_demo.sh` from the same patched sources and settings as the firmware, playing
-a scripted run (`tools/demo.cpp`).
+a scripted start and then an autopilot through the first level (`tools/demo.cpp`).
 
 - `anarch/`: git submodule, [szymor/anarch](https://github.com/szymor/anarch), kept unmodified.
 - `mods/`: Anarch mods (`NN-name.diff`). At build time the Anarch sources are copied to
@@ -158,7 +158,7 @@ switch to start again.
 
 ## Development
 
-PC tools, needing a C++20 compiler, `patch` and (for the GIF) Python with Pillow, but not
+PC tools, needing a C++20 compiler, `patch` and (for the GIF) Python with Pillow and gifsicle, but not
 ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
 
 - `tools/patch_anarch.sh <dir>`: writes the patched Anarch tree the firmware is built from
@@ -168,8 +168,9 @@ ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
   as the firmware's two cores do, and checks the quicksave behaviour of mod 12, resuming
   after a shutdown, that frames drawn on two threads match one-thread frames exactly, and
   the PCM mixer; about a minute.
-- `tools/make_demo.sh`: regenerates `demo.gif`. The run is scripted in frames, so changes
-  that affect movement or aiming may need `tools/demo.cpp` retuned.
+- `tools/make_demo.sh`: regenerates `demo.gif` (~27 s). The start is scripted in frames and an
+  autopilot plays on along fixed waypoints, so changes that affect movement, aiming or combat
+  may need `tools/demo.cpp` retuned.
 - `web/build.sh <dir> <anarch-bit-merged.bin> <version>`: assembles the browser installer
   site (page, manifest, firmware, and ESP Web Tools checked against a pinned hash and served
   from the site itself, no CDN).
