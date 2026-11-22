@@ -12,7 +12,7 @@ or Opera, a USB-C cable, one click. Nothing to install.
 
 What the Bit's 128x128 screen shows, at 2x size and 20 FPS: rendered on the PC by
 `tools/make_demo.sh` from the same patched sources and settings as the firmware, playing
-a scripted start and then an autopilot through the first level (`tools/demo.cpp`).
+the first level on autopilot (`tools/demo.cpp`).
 
 - `anarch/`: git submodule, [szymor/anarch](https://github.com/szymor/anarch), kept unmodified.
 - `mods/`: Anarch mods (`NN-name.diff`). At build time the Anarch sources are copied to
@@ -121,12 +121,11 @@ played each effect as a frequency sweep instead.
 
 ## Performance
 
-Renders at full 128x128 (`SFG_RAYCASTING_SUBSAMPLE 1`), 45 FPS, frames sent to the panel by
-DMA while the next one renders; flash runs in QIO mode with enlarged caches (the HD textures
-are read from flash every frame). With all mods, 60 FPS measured 93-131% CPU load in play on
-a Bit 3 when everything ran on one core, hence 45.
-
-Ideas from [CGB-Bit](https://github.com/dkorunic/CGB-Bit), not yet measured on the device:
+Renders at full 128x128 (`SFG_RAYCASTING_SUBSAMPLE 1`) at 60 FPS (62.5, as Anarch's PC
+versions: it counts frames in whole milliseconds, 16 each), frames sent to the panel by DMA
+while the next one renders; flash runs in QIO mode with enlarged caches (the HD textures are
+read from flash every frame). Two ideas from [CGB-Bit](https://github.com/dkorunic/CGB-Bit)
+make 60 possible:
 
 - Both cores render: the ray casting's columns alternate between them (mod 13 and
   `renderColumns` in `main/main.cpp`). Each column only reads the level and writes its own
@@ -135,6 +134,11 @@ Ideas from [CGB-Bit](https://github.com/dkorunic/CGB-Bit), not yet measured on t
 - The per-column and per-pixel functions run from internal RAM (`ANARCH_IRAM` in
   `main/CMakeLists.txt`, moved by `tools/iram_hot.sh` after the build), and `main.cpp` is
   built with `-Os`.
+
+Measured on a Bit 3 with all mods: the first core is busy 67-80% in play (about 11-12.5 ms a
+frame) and the second 53-65%; the heaviest fights reach 88-97% and dip to 53-58 FPS for a
+second or two (the game keeps its speed: Anarch then runs two logic steps per frame drawn).
+On one core, 45 FPS was the most it held: 60 measured 93-131%.
 
 `idf.py monitor` prints `CPU load: N% (columns on core 1: M%), F FPS` every second: the first
 core's busy share (game, its columns, sending frames), the second core's columns, and the
@@ -170,9 +174,9 @@ ESP-IDF. Run them from a normal shell: the ESP-IDF shell's Python has no Pillow.
   as the firmware's two cores do, and checks the quicksave behaviour of mod 12, resuming
   after a shutdown, that frames drawn on two threads match one-thread frames exactly, and
   the PCM mixer; about a minute.
-- `tools/make_demo.sh`: regenerates `demo.gif` (~27 s). The start is scripted in frames and an
-  autopilot plays on along fixed waypoints, so changes that affect movement, aiming or combat
-  may need `tools/demo.cpp` retuned.
+- `tools/make_demo.sh`: regenerates `demo.gif` (~23 s). After the menus, an autopilot plays
+  along fixed waypoints, so changes that affect movement, aiming, combat or the level may need
+  `tools/demo.cpp` retuned.
 - `web/build.sh <dir> <anarch-bit-merged.bin> <version>`: assembles the browser installer
   site (page, manifest, firmware, and ESP Web Tools checked against a pinned hash and served
   from the site itself, no CDN).

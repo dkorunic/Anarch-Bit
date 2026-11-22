@@ -42,7 +42,7 @@ every 25th playing frame checked pixel-identical to a one-thread draw. To run pa
   backlight and buzzer on LEDC, battery ADC, auto-sleep and deep-sleep shutdown, quicksave
   storage. The hardware code is shared in spirit with the sibling CGB-Bit project (same Bit, same
   pins, display, backlight, battery and shutdown code); keep the two consistent when fixing it.
-- `main/anarch_settings.h`: Anarch's compile-time settings (`SFG_FPS 45`, resolution,
+- `main/anarch_settings.h`: Anarch's compile-time settings (`SFG_FPS 60`, resolution,
   `SFG_RAYCASTING_SUBSAMPLE`, ...), shared by the firmware, the smoke test and the demo tool.
 - `main/audio.h`: the PCM `Mixer` (no ESP-IDF dependency, tested by the smoke test). Include
   `game.h` before it; it includes Anarch's `sounds.h` itself.
@@ -107,23 +107,28 @@ then read back from flash.
 ## Performance
 
 Measure on the device (the `CPU load` line); the esp32sim emulator doesn't model cache timing.
-With everything on one core, 60 FPS measured 93-131% load on a Bit 3, hence `SFG_FPS 45`; the
-two-core rendering, IRAM and `-Os` (ideas from CGB-Bit) aren't measured yet. Already tuned in
+`SFG_FPS 60` (16 ms frames: 62.5 FPS). Measured on a Bit 3: core 0 67-80% in play (~11-12.5 ms a
+frame; the menu ~4 ms), core 1 53-65%; the heaviest fights 88-97% with dips to 53-58 FPS (frames
+up to ~18 ms, the extra on core 0: sprites, particles, logic). On one core 60 measured 93-131%
+(15.5-22 ms a frame), so the two-core rendering, IRAM and `-Os` (ideas from CGB-Bit) take about a
+third off each frame. Already tuned in
 `sdkconfig.defaults`: 240 MHz, QIO flash at 80 MHz, 32 KB instruction / 64 KB data cache (HD
 textures are read from flash every frame). Fallbacks if load stays over 100%:
 `SFG_RAYCASTING_SUBSAMPLE 2` or a lower `SFG_FPS`.
 
 ## Conventions
 
-- `tools/demo.cpp` (one-thread rendering) plays level 1: a script in 1/60 s steps up to the
-  barrels, then `autopilot()` (the `Auto` step), as in CGB-Bit: it follows the `route`
-  waypoints (planned from a dump of the level's floor heights: straight lines between them must
-  clear walls and raised blocks) and fights monsters within 5 squares in a clear line. The run
-  is checked to its end (27 s: kills the ramp warrior, goes through the door at 46,37); a
-  change to movement, aiming, combat or the level needs it checked again with contact sheets of
-  the raw frames before regenerating `demo.gif`. `make_demo.sh` then runs `gifsicle -O3`
-  (lossless here, one palette; `--lossy` gains under 3% on the dithered textures). demo.gif is
-  ~4 MB at 20 FPS: chosen over 10 FPS (2.2 MB) for smoothness.
+- `tools/demo.cpp` (one-thread rendering) plays level 1: key presses through the menus, then
+  `autopilot()` (the `Auto` step), as in CGB-Bit: it follows the `route` waypoints (planned from
+  a dump of the level's floor heights: straight lines between them must clear walls, raised
+  blocks and lamps) and shoots monsters and barrels within 5 squares in a clear line. It steers
+  by the player's position, so it doesn't depend on `SFG_FPS` (a timed key script did: it broke
+  going from 45 to 60). The run is checked to its end (23 s: shotgun, barrels, the ramp warrior,
+  through the door at 46,37; it ends before a far monster it can't hit comes in range); a change
+  to movement, aiming, combat or the level needs it checked again with contact sheets of the raw
+  frames before regenerating `demo.gif`. `make_demo.sh` then runs `gifsicle -O3` (lossless here,
+  one palette; `--lossy` gains under 3% on the dithered textures). demo.gif is ~3.8 MB at 20 FPS:
+  chosen over 10 FPS (about half) for smoothness.
 - Browser installer (`web/`, ESP Web Tools 10.4.0 served from the site, hash-pinned in
   `web/build.sh`): `"new_install_prompt_erase": true` in `web/manifest.json` is essential (no
   Improv Serial: without it every install erases the whole chip). `web/build.sh` cuts the merged

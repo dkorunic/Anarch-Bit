@@ -10,30 +10,27 @@
 // keys autopilot() picks.
 enum : uint8_t { U = 1, R = 2, D = 4, L = 8, A = 16, B = 32, C = 64, Auto = 128 };
 struct Step { int frames; uint8_t keys; };
-// Level 1: grab the shotgun west of the start, come back, shoot the two barrels up north; then the
-// autopilot walks north and up the ramp, kills the warrior there and goes through the door beyond.
-// Tuned by watching the result (contact sheets of the frames); change a mod or setting that affects
-// movement or combat and it may need retuning. Deterministic; the run is checked to its end.
+// Level 1, played by autopilot() once the level starts: west over the bullets (the shotgun), back and
+// north, shooting the two barrels; then north and up the ramp, killing the warrior there, and through
+// the door beyond. The autopilot steers by the player's position, so it holds at any SFG_FPS; checked
+// by watching the result (contact sheets of the frames). Change a mod, setting or the level and it may
+// need retuning. Deterministic; the run is checked to its end.
 static const Step script[] = { // durations in 1/60 s, whatever SFG_FPS is
 	{ 90, 0 }, { 6, A },  // main menu, play
 	{ 90, 0 }, { 6, A },  // intro text, skip
 	{ 90, 0 }, { 6, A },  // level start
 	{ 40, 0 },
-	{ 23, R }, { 40, U }, // turn west, walk over the bullets: shotgun
-	{ 61, L }, { 35, U }, // back east
-	{ 29, R }, { 30, U }, // north, between the lamps
-	{ 20, 0 }, { 80, A }, // two shots: the barrels explode
-	{ 90, 0 },
-	{ 885, Auto },        // 14.75 s: ends in the corridor past the door, before a far monster comes in range
+	{ 1052, Auto },       // 17.5 s: ends 1 s after the route, before a far monster comes in range
 };
 
 // Squares (x, y) the autopilot walks through, in order (level 1's map: tools need a dump of
-// SFG_floorHeightAt to plan): north from the barrels, east and up the ramp along row 41, the door
-// at 46,37 (it opens as the player comes close), the corridor beyond. Straight lines between them
-// stay clear of the walls and the raised blocks.
+// SFG_floorHeightAt to plan): the bullets west of the start, a spot south of the barrels, north
+// between the lamps, east and up the ramp along row 41, the door at 46,37 (it opens as the player
+// comes close), the corridor beyond. Straight lines between them stay clear of the walls, the
+// raised blocks and the lamps.
 struct Point { float x, y; };
-static constexpr Point route[] = { { 52.5f, 46.5f }, { 52.5f, 44.5f }, { 58.5f, 44.5f }, { 58.5f, 41.5f },
-	{ 50.5f, 41.5f }, { 46.5f, 38.5f }, { 46.5f, 35.5f }, { 46.5f, 30.5f } };
+static constexpr Point route[] = { { 48.6f, 55.5f }, { 52.5f, 53.5f }, { 52.5f, 46.5f }, { 52.5f, 44.5f }, { 58.5f, 44.5f },
+	{ 58.5f, 41.5f }, { 50.5f, 41.5f }, { 46.5f, 38.5f }, { 46.5f, 35.5f }, { 46.5f, 30.5f } };
 static size_t waypoint;
 
 // Nothing between the two points higher than half a square above the player's floor (a wall, a
@@ -56,29 +53,40 @@ static int turnTo(float dx, float dy){
 	return ((want - (int) SFG_player.camera.direction) % 1024 + 1536) % 1024 - 512;
 }
 
-// A monster that isn't dead or dying within 5 squares in a clear line: turn to it, fire once
-// facing it. Otherwise follow the route, walking while roughly facing the next point.
+// The nearest monster that isn't dead or dying, or barrel, within 5 squares in a clear line: turn
+// to it, fire once facing it. Otherwise follow the route, walking while roughly facing the next
+// point. Only while playing (no keys on a level-start or death screen).
 static uint8_t autopilot(){
+	if(SFG_game.state != SFG_GAME_STATE_PLAYING) return 0;
 	const float px = SFG_player.camera.position.x / float(RCL_UNITS_PER_SQUARE), py = SFG_player.camera.position.y / float(RCL_UNITS_PER_SQUARE);
-	const SFG_MonsterRecord* target = nullptr;
-	float nearest = 5;
+	float nearest = 5, tx = 0, ty = 0;
+	auto consider = [&](float x, float y){
+		const float d = std::hypot(x - px, y - py);
+		if(d < nearest && clearLine(px, py, x, y)){
+			nearest = d;
+			tx = x;
+			ty = y;
+		}
+	};
 	for(int i = 0; i < SFG_currentLevel.monsterRecordCount; i++){
 		const SFG_MonsterRecord& m = SFG_currentLevel.monsterRecords[i];
-		const float mx = m.coords[0] / 4.0f, my = m.coords[1] / 4.0f, d = std::hypot(mx - px, my - py); // coords: 1/4 squares
-		if(SFG_MR_STATE(m) != SFG_MONSTER_STATE_DEAD && SFG_MR_STATE(m) != SFG_MONSTER_STATE_DYING && d < nearest && clearLine(px, py, mx, my)){
-			target = &m;
-			nearest = d;
-		}
+		if(SFG_MR_STATE(m) != SFG_MONSTER_STATE_DEAD && SFG_MR_STATE(m) != SFG_MONSTER_STATE_DYING)
+			consider(m.coords[0] / 4.0f, m.coords[1] / 4.0f); // coords: 1/4 squares
 	}
-	if(target){
-		const int turn = turnTo(target->coords[0] / 4.0f - px, target->coords[1] / 4.0f - py);
-		return turn > 8 ? R : turn < -8 ? L : A;
+	for(int i = 0; i < SFG_currentLevel.itemRecordCount; i++){ // items still in the level; a barrel goes when shot
+		const SFG_LevelElement& e = SFG_currentLevel.levelPointer->elements[SFG_currentLevel.itemRecords[i] & ~SFG_ITEM_RECORD_ACTIVE_MASK];
+		if(e.type == SFG_LEVEL_ELEMENT_BARREL) consider(e.coords[0] + 0.5f, e.coords[1] + 0.5f);
+	}
+	constexpr int step = SFG_PLAYER_TURN_UNITS_PER_FRAME; // one frame's turn
+	if(nearest < 5){
+		const int turn = turnTo(tx - px, ty - py);
+		return turn > step ? R : turn < -step ? L : A;
 	}
 	constexpr size_t points = sizeof(route) / sizeof(*route);
 	while(waypoint < points && std::hypot(route[waypoint].x - px, route[waypoint].y - py) < 0.4f) waypoint++;
 	if(waypoint == points) return 0;
 	const int turn = turnTo(route[waypoint].x - px, route[waypoint].y - py);
-	return (turn > 11 ? R : turn < -11 ? L : 0) | (std::abs(turn) < 96 ? U : 0); // 11: a frame's turn
+	return (turn > step ? R : turn < -step ? L : 0) | (std::abs(turn) < 96 ? U : 0);
 }
 
 static uint8_t screen[SFG_SCREEN_RESOLUTION_X * SFG_SCREEN_RESOLUTION_Y];
